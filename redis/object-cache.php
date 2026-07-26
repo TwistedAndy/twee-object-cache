@@ -658,6 +658,7 @@ class WP_Object_Cache {
 	public function stats(): void
 	{
 		echo '<p>';
+		echo '<strong>Engine:</strong> Redis<br />';
 		echo '<strong>Cache Hits:</strong> ' . esc_html($this->cache_hits) . '<br />';
 		echo '<strong>Cache Misses:</strong> ' . esc_html($this->cache_misses) . '<br />';
 		echo '<strong>Cache Sets:</strong> ' . esc_html($this->cache_sets) . '<br />';
