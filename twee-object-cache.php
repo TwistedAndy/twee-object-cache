@@ -15,14 +15,37 @@ if (!defined('ABSPATH')) {
 add_action('admin_bar_menu', 'twee_object_cache_admin_bar', 100);
 
 /**
+ * Clear object cache on activation
+ */
+register_activation_hook(__FILE__, function(): void {
+	wp_cache_flush();
+});
+
+/**
+ * Clear object cache on deactivation
+ */
+register_deactivation_hook(__FILE__, function(): void {
+	wp_cache_flush();
+
+	$dropin_file = WP_CONTENT_DIR . '/object-cache.php';
+
+	if (file_exists($dropin_file)) {
+		unlink($dropin_file);
+	}
+});
+
+/**
  * Add a notice when it's not possible to activate the cache engine
  */
 if (isset($_GET['twee_cache_error']) and $_GET['twee_cache_error'] === 'unreachable') {
 	add_action('admin_notices', function() {
-		wp_admin_notice('The selected cache engine is not reachable. Please check your configuration.', [
-			'type'        => 'error',
-			'dismissible' => true,
-		]);
+		$message = 'The selected cache engine is not reachable. Please check your configuration.';
+
+		if (function_exists('wp_admin_notice')) {
+			wp_admin_notice($message, ['type' => 'error', 'dismissible' => true,]);
+		} else {
+			echo '<div class="notice notice-error"><p>' . $message . '</p></div>';
+		}
 	});
 }
 
@@ -54,6 +77,8 @@ function twee_object_cache_admin_bar($admin_bar): void
 
 				if (file_exists($source_file)) {
 					copy($source_file, $dropin_file);
+					wp_cache_flush();
+
 					$redirect_url = add_query_arg([
 						'twee_cache_action' => 'flush',
 						'_wpnonce'          => wp_create_nonce('twee_cache_action')
@@ -159,7 +184,7 @@ function twee_object_cache_admin_bar($admin_bar): void
 function twee_object_cache_is_reachable($ext): bool
 {
 	if ($ext === 'apcu') {
-		return filter_var(ini_get('apc.enabled'), FILTER_VALIDATE_BOOLEAN) or (php_sapi_name() === 'cli' and filter_var(ini_get('apc.enable_cli'), FILTER_VALIDATE_BOOLEAN));
+		return (function_exists('apcu_enabled') and apcu_enabled());
 	}
 
 	if ($ext === 'memcached') {

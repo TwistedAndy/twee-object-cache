@@ -255,10 +255,14 @@ class WP_Object_Cache {
 		} catch (Exception $e) {
 			$error = $e->getMessage();
 
-			if (function_exists('add_action') and $error) {
+			if (function_exists('add_action')) {
 				add_action('admin_notices', function() use ($error) {
-					if (current_user_can('manage_options')) {
-						echo '<div class="notice notice-error"><p><strong>Redis Object Cache Error:</strong> ' . esc_html($error) . '</p></div>';
+					$message = '<strong>Redis Object Cache Error:</strong> ' . esc_html($error);
+
+					if (function_exists('wp_admin_notice')) {
+						wp_admin_notice($message, ['type' => 'error']);
+					} else {
+						echo '<div class="notice notice-error"><p>' . $message . '</p></div>';
 					}
 				});
 			}

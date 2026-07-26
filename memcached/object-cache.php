@@ -241,6 +241,30 @@ class WP_Object_Cache {
 				$this->memcached->addServer('127.0.0.1', 11211);
 			}
 		}
+
+		$stats = $this->memcached->getStats();
+		$is_connected = false;
+
+		if (!empty($stats)) {
+			foreach ($stats as $data) {
+				if (is_array($data) and isset($data['pid']) and $data['pid'] > 0) {
+					$is_connected = true;
+					break;
+				}
+			}
+		}
+
+		if (!$is_connected and function_exists('add_action')) {
+			add_action('admin_notices', function() {
+				$message = '<strong>Memcached Object Cache Error:</strong> Could not connect to any Memcached servers.';
+
+				if (function_exists('wp_admin_notice')) {
+					wp_admin_notice($message, ['type' => 'error']);
+				} else {
+					echo '<div class="notice notice-error"><p>' . $message . '</p></div>';
+				}
+			});
+		}
 	}
 
 	public function get(int|string $key, string $group = 'default', bool|null $force = false, &$found = null): mixed

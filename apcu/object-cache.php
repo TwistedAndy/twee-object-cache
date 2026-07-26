@@ -217,6 +217,20 @@ class WP_Object_Cache {
 		if (strlen($this->key_salt) > 20) {
 			$this->key_salt = substr($this->key_salt, 0, 20);
 		}
+
+		$is_enabled = (function_exists('apcu_enabled') and apcu_enabled());
+
+		if (!$is_enabled and function_exists('add_action')) {
+			add_action('admin_notices', function() {
+				$message = '<strong>APCu Object Cache Error:</strong> The APCu extension is not enabled.';
+
+				if (function_exists('wp_admin_notice')) {
+					wp_admin_notice($message, ['type' => 'error']);
+				} else {
+					echo '<div class="notice notice-error"><p>' . $message . '</p></div>';
+				}
+			});
+		}
 	}
 
 	public function get(int|string $key, string $group = 'default', bool|null $force = false, &$found = null): mixed
