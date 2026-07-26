@@ -200,6 +200,8 @@ class WP_Object_Cache {
 
 	private string $key_salt = '';
 
+	private bool $active = true;
+
 	public function __construct()
 	{
 		if (is_multisite()) {
@@ -218,9 +220,9 @@ class WP_Object_Cache {
 			$this->key_salt = substr($this->key_salt, 0, 20);
 		}
 
-		$is_enabled = (function_exists('apcu_enabled') and apcu_enabled());
+		$this->active = (function_exists('apcu_enabled') and apcu_enabled());
 
-		if (!$is_enabled and function_exists('add_action')) {
+		if (!$this->active and function_exists('add_action')) {
 			add_action('admin_notices', function() {
 				$message = '<strong>APCu Object Cache Error:</strong> The APCu extension is not enabled.';
 
@@ -244,7 +246,7 @@ class WP_Object_Cache {
 		}
 
 		// If it's a non-persistent group and wasn't in runtime, it's a miss
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$found = false;
 			$this->cache_misses++;
 
@@ -290,7 +292,7 @@ class WP_Object_Cache {
 		}
 
 		// Skip APCu if it's non-persistent data
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			return true;
 		}
 
@@ -356,14 +358,14 @@ class WP_Object_Cache {
 			$this->cache[$group] = [];
 		}
 
-		if (!array_key_exists($key, $this->cache[$group]) and isset($this->non_persistent_groups[$group])) {
+		if (!array_key_exists($key, $this->cache[$group]) and (isset($this->non_persistent_groups[$group]) or !$this->active)) {
 			return false;
 		}
 
 		$cache_key = $this->build_key($key, $group);
 
 		// If it doesn't exist in APCu and it's a persistent group, fail the replace
-		if (!isset($this->non_persistent_groups[$group]) and !apcu_exists($cache_key)) {
+		if (!isset($this->non_persistent_groups[$group]) and $this->active and !apcu_exists($cache_key)) {
 			return false;
 		}
 
@@ -379,7 +381,7 @@ class WP_Object_Cache {
 			$deleted_runtime = true;
 		}
 
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			return $deleted_runtime;
 		}
 
@@ -401,7 +403,7 @@ class WP_Object_Cache {
 
 	public function incr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
 	{
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
 			if ($value === false) {
@@ -430,7 +432,7 @@ class WP_Object_Cache {
 
 	public function decr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
 	{
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
 			if ($value === false) {
@@ -468,10 +470,12 @@ class WP_Object_Cache {
 	{
 		$this->flush_runtime();
 
-		// Flush only keys belonging to this installation
-		$pattern = '/^' . preg_quote($this->key_salt . ':', '/') . '/';
-		$iterator = new APCUIterator($pattern, APC_ITER_KEY, 100);
-		apcu_delete($iterator);
+		if ($this->active) {
+			// Flush only keys belonging to this installation
+			$pattern = '/^' . preg_quote($this->key_salt . ':', '/') . '/';
+			$iterator = new APCUIterator($pattern, APC_ITER_KEY, 100);
+			apcu_delete($iterator);
+		}
 
 		return true;
 	}
@@ -486,6 +490,10 @@ class WP_Object_Cache {
 	public function flush_group(string $group): bool
 	{
 		unset($this->cache[$group]);
+
+		if (!$this->active) {
+			return true;
+		}
 
 		if ($this->multisite and !isset($this->global_groups[$group])) {
 			$prefix = $this->blog_prefix;

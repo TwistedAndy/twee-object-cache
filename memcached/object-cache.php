@@ -202,6 +202,8 @@ class WP_Object_Cache {
 
 	private string $key_salt = '';
 
+	private bool $active = false;
+
 	private Memcached $memcached;
 
 	public function __construct()
@@ -243,18 +245,17 @@ class WP_Object_Cache {
 		}
 
 		$stats = $this->memcached->getStats();
-		$is_connected = false;
 
 		if (!empty($stats)) {
 			foreach ($stats as $data) {
 				if (is_array($data) and isset($data['pid']) and $data['pid'] > 0) {
-					$is_connected = true;
+					$this->active = true;
 					break;
 				}
 			}
 		}
 
-		if (!$is_connected and function_exists('add_action')) {
+		if (!$this->active and function_exists('add_action')) {
 			add_action('admin_notices', function() {
 				$message = '<strong>Memcached Object Cache Error:</strong> Could not connect to any Memcached servers.';
 
@@ -278,7 +279,7 @@ class WP_Object_Cache {
 		}
 
 		// If it's a non-persistent group and wasn't in runtime, it's a miss
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$found = false;
 			$this->cache_misses++;
 
@@ -316,7 +317,7 @@ class WP_Object_Cache {
 				$this->cache_hits++;
 				$value = $this->cache[$group][$key];
 				$values[$key] = $value;
-			} elseif (isset($this->non_persistent_groups[$group])) {
+			} elseif (isset($this->non_persistent_groups[$group]) or !$this->active) {
 				$this->cache_misses++;
 				$values[$key] = false;
 			} else {
@@ -367,7 +368,7 @@ class WP_Object_Cache {
 		}
 
 		// Skip Memcached if it's non-persistent data
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			return true;
 		}
 
@@ -385,7 +386,7 @@ class WP_Object_Cache {
 			$values[$key] = true;
 
 			// Prepare data for bulk Memcached storage if persistent
-			if (!isset($this->non_persistent_groups[$group])) {
+			if (!isset($this->non_persistent_groups[$group]) and $this->active) {
 				$cache_values[$this->build_key($key, $group)] = $value;
 			}
 		}
@@ -416,7 +417,7 @@ class WP_Object_Cache {
 			return false;
 		}
 
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$this->cache[$group][$key] = $data;
 			$this->cache_sets++;
 
@@ -450,11 +451,11 @@ class WP_Object_Cache {
 			$this->cache[$group] = [];
 		}
 
-		if (!array_key_exists($key, $this->cache[$group]) and isset($this->non_persistent_groups[$group])) {
+		if (!array_key_exists($key, $this->cache[$group]) and (isset($this->non_persistent_groups[$group]) or !$this->active)) {
 			return false;
 		}
 
-		if (!isset($this->non_persistent_groups[$group])) {
+		if (!isset($this->non_persistent_groups[$group]) and $this->active) {
 			$replaced = $this->memcached->replace($this->build_key($key, $group), $data, (int) $expire);
 			if ($replaced) {
 				$this->cache[$group][$key] = $data;
@@ -476,7 +477,7 @@ class WP_Object_Cache {
 			$deleted_runtime = true;
 		}
 
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			return $deleted_runtime;
 		}
 
@@ -496,7 +497,7 @@ class WP_Object_Cache {
 
 	public function incr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
 	{
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
 			if ($value === false) {
@@ -523,7 +524,7 @@ class WP_Object_Cache {
 
 	public function decr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
 	{
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
 			if ($value === false) {
@@ -551,7 +552,10 @@ class WP_Object_Cache {
 	public function flush(): bool
 	{
 		$this->flush_runtime();
-		$this->memcached->flush();
+
+		if ($this->active) {
+			$this->memcached->flush();
+		}
 
 		return true;
 	}
@@ -567,6 +571,10 @@ class WP_Object_Cache {
 	public function flush_group(string $group): bool
 	{
 		unset($this->cache[$group]);
+
+		if (!$this->active) {
+			return true;
+		}
 
 		if (isset($this->global_groups[$group])) {
 			$prefix = '';

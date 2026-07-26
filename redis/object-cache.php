@@ -202,6 +202,8 @@ class WP_Object_Cache {
 
 	private string $key_salt = '';
 
+	private bool $active = true;
+
 	private $redis;
 
 	public function __construct()
@@ -253,6 +255,7 @@ class WP_Object_Cache {
 				$this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP);
 			}
 		} catch (Exception $e) {
+			$this->active = false;
 			$error = $e->getMessage();
 
 			if (function_exists('add_action')) {
@@ -280,7 +283,7 @@ class WP_Object_Cache {
 		}
 
 		// If it's a non-persistent group and wasn't in runtime, it's a miss
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$found = false;
 			$this->cache_misses++;
 
@@ -319,7 +322,7 @@ class WP_Object_Cache {
 				$this->cache_hits++;
 				$value = $this->cache[$group][$key];
 				$values[$key] = $value;
-			} elseif (isset($this->non_persistent_groups[$group])) {
+			} elseif (isset($this->non_persistent_groups[$group]) or !$this->active) {
 				$this->cache_misses++;
 				$values[$key] = false;
 			} else {
@@ -369,7 +372,7 @@ class WP_Object_Cache {
 		}
 
 		// Skip Redis if it's non-persistent data
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			return true;
 		}
 
@@ -391,7 +394,7 @@ class WP_Object_Cache {
 			$values[$key] = true;
 
 			// Prepare data for bulk Redis storage if persistent
-			if (!isset($this->non_persistent_groups[$group])) {
+			if (!isset($this->non_persistent_groups[$group]) and $this->active) {
 				$cache_values[$this->build_key($key, $group)] = $value;
 			}
 		}
@@ -430,7 +433,7 @@ class WP_Object_Cache {
 			return false;
 		}
 
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$this->cache[$group][$key] = $data;
 			$this->cache_sets++;
 
@@ -469,11 +472,11 @@ class WP_Object_Cache {
 			$this->cache[$group] = [];
 		}
 
-		if (!array_key_exists($key, $this->cache[$group]) and isset($this->non_persistent_groups[$group])) {
+		if (!array_key_exists($key, $this->cache[$group]) and (isset($this->non_persistent_groups[$group]) or !$this->active)) {
 			return false;
 		}
 
-		if (!isset($this->non_persistent_groups[$group])) {
+		if (!isset($this->non_persistent_groups[$group]) and $this->active) {
 			$options = ['xx'];
 			if ($expire > 0) {
 				$options['ex'] = $expire;
@@ -500,7 +503,7 @@ class WP_Object_Cache {
 			$deleted_runtime = true;
 		}
 
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			return $deleted_runtime;
 		}
 
@@ -520,7 +523,7 @@ class WP_Object_Cache {
 
 	public function incr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
 	{
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
 			if ($value === false) {
@@ -551,7 +554,7 @@ class WP_Object_Cache {
 
 	public function decr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
 	{
-		if (isset($this->non_persistent_groups[$group])) {
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
 			if ($value === false) {
@@ -588,7 +591,10 @@ class WP_Object_Cache {
 	public function flush(): bool
 	{
 		$this->flush_runtime();
-		$this->redis->flushDb();
+
+		if ($this->active) {
+			$this->redis->flushDb();
+		}
 
 		return true;
 	}
@@ -604,6 +610,10 @@ class WP_Object_Cache {
 	public function flush_group(string $group): bool
 	{
 		unset($this->cache[$group]);
+
+		if (!$this->active) {
+			return true;
+		}
 
 		if (isset($this->global_groups[$group])) {
 			$prefix = '';
