@@ -6,6 +6,7 @@
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
+
 if (!defined('ABSPATH')) {
 	exit;
 }
@@ -179,34 +180,36 @@ function wp_cache_reset()
 #[AllowDynamicProperties]
 class WP_Object_Cache {
 
-	public $cache_hits = 0;
+	public int $cache_hits = 0;
 
-	public $cache_misses = 0;
+	public int $cache_misses = 0;
 
-	public $cache_sets = 0;
+	public int $cache_sets = 0;
 
-	private $cache = [];
+	private array $cache = [];
 
-	private $global_groups = [];
+	private array $global_groups = [];
 
-	private $group_mapping = [];
+	private array $group_mapping = [];
 
-	private $non_persistent_groups = [];
+	private array $non_persistent_groups = [];
 
-	private $runtime_cache_limit = 10000;
+	private int $runtime_cache_limit = 10000;
 
-	private $multisite = false;
+	private bool $multisite = false;
 
-	private $blog_prefix = '';
+	private string $blog_prefix = '';
 
-	private $key_salt = '';
+	private string $key_salt = '';
 
-	private $memcached;
+	private Memcached $memcached;
 
 	public function __construct()
 	{
-		$this->multisite = is_multisite();
-		$this->blog_prefix = $this->multisite ? get_current_blog_id() . ':' : '';
+		if (is_multisite()) {
+			$this->multisite = true;
+			$this->blog_prefix = get_current_blog_id();
+		}
 
 		if (defined('WP_CACHE_KEY_SALT')) {
 			$this->key_salt = WP_CACHE_KEY_SALT;
@@ -344,7 +347,7 @@ class WP_Object_Cache {
 			return true;
 		}
 
-		return $this->memcached->set($this->build_key($key, $group), $data, (int) $expire);
+		return $this->memcached->set($this->build_key($key, $group), $data, $expire);
 	}
 
 	public function set_multiple(array $data, string $group = 'default', int $expire = 0): array

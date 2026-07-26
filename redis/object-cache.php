@@ -1,5 +1,4 @@
 <?php
-
 /**
  * Plugin Name: Twee Redis Object Cache
  * Description: A high-performance, lightweight Redis object cache for WordPress and WooCommerce.
@@ -7,6 +6,7 @@
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
+
 if (!defined('ABSPATH')) {
 	exit;
 }

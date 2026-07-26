@@ -7,8 +7,6 @@
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
 
-declare(strict_types = 1);
-
 if (!defined('ABSPATH')) {
 	exit;
 }
@@ -182,30 +180,32 @@ function wp_cache_reset()
 #[AllowDynamicProperties]
 class WP_Object_Cache {
 
-	public $cache_hits = 0;
+	public int $cache_hits = 0;
 
-	public $cache_misses = 0;
+	public int $cache_misses = 0;
 
-	public $cache_sets = 0;
+	public int $cache_sets = 0;
 
-	private $cache = [];
+	private array $cache = [];
 
-	private $global_groups = [];
+	private array $global_groups = [];
 
-	private $non_persistent_groups = [];
+	private array $non_persistent_groups = [];
 
-	private $runtime_cache_limit = 100000;
+	private int $runtime_cache_limit = 100000;
 
-	private $multisite = false;
+	private bool $multisite = false;
 
-	private $blog_prefix = '';
+	private string $blog_prefix = '';
 
-	private $key_salt = '';
+	private string $key_salt = '';
 
 	public function __construct()
 	{
-		$this->multisite = is_multisite();
-		$this->blog_prefix = $this->multisite ? get_current_blog_id() . ':' : '';
+		if (is_multisite()) {
+			$this->multisite = true;
+			$this->blog_prefix = get_current_blog_id();
+		}
 
 		if (defined('WP_CACHE_KEY_SALT')) {
 			$this->key_salt = WP_CACHE_KEY_SALT;
@@ -336,7 +336,7 @@ class WP_Object_Cache {
 		return $values;
 	}
 
-	public function replace(int|string $key, mixed $data, string $group = 'default', int $expire = 0)
+	public function replace(int|string $key, mixed $data, string $group = 'default', int $expire = 0): bool
 	{
 		if (!isset($this->cache[$group])) {
 			$this->cache[$group] = [];
