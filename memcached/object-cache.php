@@ -206,8 +206,17 @@ class WP_Object_Cache {
 
 	private Memcached $memcached;
 
+	private string $serializer = 'serialize';
+
+	private string $unserializer = 'unserialize';
+
 	public function __construct()
 	{
+		if (function_exists('igbinary_serialize')) {
+			$this->serializer = 'igbinary_serialize';
+			$this->unserializer = 'igbinary_unserialize';
+		}
+
 		if (is_multisite()) {
 			$this->multisite = true;
 			$this->blog_prefix = get_current_blog_id();
@@ -400,7 +409,7 @@ class WP_Object_Cache {
 
 		$result = $this->memcached->set($this->build_key($key, $group), $data, $expire);
 
-		if (!$result and is_array($data) and $this->memcached->getResultCode() === Memcached::RES_E2BIG) {
+		if (!$result and $this->memcached->getResultCode() === Memcached::RES_E2BIG) {
 			return $this->set_chunked_value($key, $data, $group, $expire);
 		}
 
@@ -698,26 +707,27 @@ class WP_Object_Cache {
 		$chunks = $this->memcached->getMulti($cache_keys);
 
 		if (is_array($chunks) and count($chunks) === count($cache_keys)) {
-			$assembled = [];
+			$assembled = '';
 
 			foreach ($cache_keys as $cache_key) {
-				foreach ($chunks[$cache_key] as $k => $v) {
-					$assembled[$k] = $v;
-				}
+				$assembled .= $chunks[$cache_key];
 			}
 
-			return $assembled;
+			$unserializer = $this->unserializer;
+			return $unserializer($assembled);
 		}
 
-		return $value;
+		return false;
 	}
 
 	/**
-	 * Splits a massive array into chunks and stores them in Memcached
+	 * Splits a massive payload into chunks and stores them in Memcached
 	 */
-	private function set_chunked_value(int|string $key, array $data, string $group, int $expire): bool
+	private function set_chunked_value(int|string $key, mixed $data, string $group, int $expire): bool
 	{
-		$chunks = array_chunk($data, 500, true);
+		$serializer = $this->serializer;
+		$serialized = $serializer($data);
+		$chunks = str_split($serialized, 500000);
 		$chunk_keys = [];
 		$multi_set = [];
 
