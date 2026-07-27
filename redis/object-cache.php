@@ -219,8 +219,8 @@ class WP_Object_Cache {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9]/', '_', $host);
 		}
 
-		if (strlen($this->key_salt) > 20) {
-			$this->key_salt = substr($this->key_salt, 0, 20);
+		if (strlen($this->key_salt) > 10) {
+			$this->key_salt = substr($this->key_salt, 0, 10);
 		}
 
 		if (defined('WP_REDIS_USE_RELAY') and WP_REDIS_USE_RELAY and class_exists('Relay\Relay')) {
@@ -336,14 +336,12 @@ class WP_Object_Cache {
 		foreach ($keys as $key) {
 			if (!$force and isset($this->cache[$group]) and array_key_exists($key, $this->cache[$group])) {
 				$this->cache_hits++;
-				$value = $this->cache[$group][$key];
-				$values[$key] = $value;
+				$values[$key] = $this->cache[$group][$key];
 			} elseif (isset($this->non_persistent_groups[$group]) or !$this->active) {
 				$this->cache_misses++;
 				$values[$key] = false;
 			} else {
-				$cache_key = $this->build_key($key, $group);
-				$cache_keys[] = $cache_key;
+				$cache_keys[] = $this->build_key($key, $group);
 				$key_map[] = $key;
 			}
 		}
@@ -658,10 +656,30 @@ class WP_Object_Cache {
 
 	public function flush_group(string $group): bool
 	{
-		unset($this->cache[$group]);
+		// Harvest old keys from runtime cache to perform a partial ghost-key cleanup
+		if ($this->active and !isset($this->non_persistent_groups[$group])) {
+			$keys_to_delete = [];
 
-		if (!$this->active or isset($this->non_persistent_groups[$group])) {
+			if (isset($this->cache[$group]) and !empty($this->cache[$group])) {
+				foreach ($this->cache[$group] as $key => $value) {
+					$keys_to_delete[] = $this->build_key($key, $group);
+				}
+			}
+
+			unset($this->cache[$group]);
+		} else {
+			unset($this->cache[$group]);
+
 			return true;
+		}
+
+		// Clean up the harvested keys from Redis to minimize stale memory bloat
+		if (!empty($keys_to_delete)) {
+			if (method_exists($this->redis, 'unlink')) {
+				$this->redis->unlink($keys_to_delete);
+			} else {
+				$this->redis->del($keys_to_delete);
+			}
 		}
 
 		if (isset($this->global_groups[$group])) {
@@ -670,8 +688,10 @@ class WP_Object_Cache {
 			$prefix = $this->blog_prefix;
 		}
 
-		$version_key = $this->key_salt . ':group:' . $prefix . $group;
-		$version = $this->redis->get($version_key);
+		$group_field = $prefix . $group;
+		$versions_hash = $this->key_salt . ':versions';
+
+		$version = $this->redis->hGet($versions_hash, $group_field);
 
 		if ($version === false or !is_numeric($version)) {
 			$version = 1;
@@ -680,7 +700,7 @@ class WP_Object_Cache {
 			$version++;
 		}
 
-		$this->redis->set($version_key, $version);
+		$this->redis->hSet($versions_hash, $group_field, $version);
 
 		// Map the new version in the runtime property
 		$this->group_mapping[$group] = $this->key_salt . ':' . $prefix . $group . ':' . $version;
@@ -755,17 +775,19 @@ class WP_Object_Cache {
 			$prefix = $this->blog_prefix;
 		}
 
-		$version_key = $this->key_salt . ':group:' . $prefix . $group;
-		$version_number = $this->redis->get($version_key);
+		$group_field = $prefix . $group;
+		$versions_hash = $this->key_salt . ':versions';
 
-		if ($version_number === false or !is_numeric($version_number)) {
-			$version_number = 0;
-			$this->redis->set($version_key, $version_number);
+		$version = $this->redis->hGet($versions_hash, $group_field);
+
+		if ($version === false or !is_numeric($version)) {
+			$version = 0;
+			$this->redis->hSet($versions_hash, $group_field, $version);
 		} else {
-			$version_number = (int) $version_number;
+			$version = (int) $version;
 		}
 
-		$cache_group = $this->key_salt . ':' . $prefix . $group . ':' . $version_number;
+		$cache_group = $this->key_salt . ':' . $prefix . $group . ':' . $version;
 
 		$this->group_mapping[$group] = $cache_group;
 

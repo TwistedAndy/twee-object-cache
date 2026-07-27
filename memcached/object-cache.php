@@ -627,10 +627,26 @@ class WP_Object_Cache {
 
 	public function flush_group(string $group): bool
 	{
-		unset($this->cache[$group]);
+		// Harvest old keys from runtime cache to perform a partial ghost-key cleanup
+		if ($this->active and !isset($this->non_persistent_groups[$group])) {
+			$keys_to_delete = [];
 
-		if (!$this->active) {
+			if (isset($this->cache[$group]) and !empty($this->cache[$group])) {
+				foreach ($this->cache[$group] as $key => $value) {
+					$keys_to_delete[] = $this->build_key($key, $group);
+				}
+			}
+
+			unset($this->cache[$group]);
+		} else {
+			unset($this->cache[$group]);
+
 			return true;
+		}
+
+		// Clean up the harvested keys from Memcached to minimize stale memory bloat
+		if (!empty($keys_to_delete)) {
+			$this->memcached->deleteMulti($keys_to_delete);
 		}
 
 		if (isset($this->global_groups[$group])) {
