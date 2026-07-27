@@ -1,6 +1,7 @@
 <?php
 /**
  * Plugin Name: Twee APCu Object Cache
+ * Plugin URI: https://github.com/TwistedAndy/twee-object-cache
  * Description: A high-performance, lightweight APCu object cache for WordPress and WooCommerce.
  * Version: 1.0.0
  * Author: Andrii Toniievych

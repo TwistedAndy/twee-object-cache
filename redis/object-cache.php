@@ -1,6 +1,7 @@
 <?php
 /**
  * Plugin Name: Twee Redis Object Cache
+ * Plugin URI: https://github.com/TwistedAndy/twee-object-cache
  * Description: A high-performance, lightweight Redis object cache for WordPress and WooCommerce.
  * Version: 1.0.0
  * Author: Andrii Toniievych
@@ -603,7 +604,7 @@ class WP_Object_Cache {
 		$value = max(0, (int) $value - $offset);
 		$result = $this->redis->set($cache_key, $value, ['keepttl']);
 
-		if ($result === false && $this->redis->getLastError()) {
+		if ($result === false and $this->redis->getLastError()) {
 			$this->redis->clearLastError();
 			$result = $this->redis->set($cache_key, $value);
 		}
@@ -644,7 +645,7 @@ class WP_Object_Cache {
 	{
 		unset($this->cache[$group]);
 
-		if (!$this->active) {
+		if (!$this->active or isset($this->non_persistent_groups[$group])) {
 			return true;
 		}
 
@@ -655,12 +656,16 @@ class WP_Object_Cache {
 		}
 
 		$version_key = $this->key_salt . ':group:' . $prefix . $group;
-		$version = $this->redis->incr($version_key);
+		$version = $this->redis->get($version_key);
 
-		if ($version === false) {
+		if ($version === false or !is_numeric($version)) {
 			$version = 1;
-			$this->redis->set($version_key, $version);
+		} else {
+			$version = (int) $version;
+			$version++;
 		}
+
+		$this->redis->set($version_key, $version);
 
 		// Map the new version in the runtime property
 		$this->group_mapping[$group] = $this->key_salt . ':' . $prefix . $group . ':' . $version;
@@ -738,9 +743,11 @@ class WP_Object_Cache {
 		$version_key = $this->key_salt . ':group:' . $prefix . $group;
 		$version_number = $this->redis->get($version_key);
 
-		if ($version_number === false) {
+		if ($version_number === false or !is_numeric($version_number)) {
 			$version_number = 0;
 			$this->redis->set($version_key, $version_number);
+		} else {
+			$version_number = (int) $version_number;
 		}
 
 		$cache_group = $this->key_salt . ':' . $prefix . $group . ':' . $version_number;
