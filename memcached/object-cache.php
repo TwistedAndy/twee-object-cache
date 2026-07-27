@@ -282,16 +282,16 @@ class WP_Object_Cache {
 			}
 
 			if (function_exists('add_action')) {
-			add_action('admin_notices', function() {
-				$message = '<strong>Memcached Object Cache Error:</strong> Could not connect to any Memcached servers.';
+				add_action('admin_notices', function() {
+					$message = '<strong>Memcached Object Cache Error:</strong> Could not connect to any Memcached servers.';
 
-				if (function_exists('wp_admin_notice')) {
-					wp_admin_notice($message, ['type' => 'error']);
-				} else {
-					echo '<div class="notice notice-error"><p>' . $message . '</p></div>';
-				}
-			});
-		}
+					if (function_exists('wp_admin_notice')) {
+						wp_admin_notice($message, ['type' => 'error']);
+					} else {
+						echo '<div class="notice notice-error"><p>' . $message . '</p></div>';
+					}
+				});
+			}
 		}
 	}
 
@@ -538,15 +538,74 @@ class WP_Object_Cache {
 			return $deleted_runtime;
 		}
 
-		return ($this->memcached->delete($this->build_key($key, $group)) or $deleted_runtime);
+		$memcached_key = $this->build_key($key, $group);
+
+		// Check if the item is chunked before deleting
+		$value = $this->memcached->get($memcached_key);
+
+		if (is_array($value) and isset($value['__chunk_list'])) {
+			$chunk_keys = [];
+
+			foreach ($value['__chunk_list'] as $chunk_key) {
+				$chunk_keys[] = $this->build_key($chunk_key, $group);
+			}
+
+			if (!empty($chunk_keys)) {
+				$this->memcached->deleteMulti($chunk_keys);
+			}
+		}
+
+		return ($this->memcached->delete($memcached_key) or $deleted_runtime);
 	}
 
 	public function delete_multiple(array $keys, string $group = 'default'): array
 	{
+		if (empty($keys)) {
+			return [];
+		}
+
 		$values = [];
+		$runtime_group = $this->cache[$group] ?? [];
 
 		foreach ($keys as $key) {
-			$values[$key] = $this->delete($key, $group);
+			if (array_key_exists($key, $runtime_group)) {
+				unset($this->cache[$group][$key]);
+				$values[$key] = true;
+			} else {
+				$values[$key] = false;
+			}
+		}
+
+		if (!$this->active or isset($this->non_persistent_groups[$group])) {
+			return $values;
+		}
+
+		$memcached_keys = [];
+
+		foreach ($keys as $key) {
+			$memcached_keys[$key] = $this->build_key($key, $group);
+		}
+
+		$delete_keys = array_values($memcached_keys);
+
+		$raw_values = $this->memcached->getMulti($delete_keys) ? : [];
+
+		foreach ($raw_values as $raw_value) {
+			if (is_array($raw_value) and isset($raw_value['__chunk_list'])) {
+				foreach ($raw_value['__chunk_list'] as $chunk_key) {
+					$delete_keys[] = $this->build_key($chunk_key, $group);
+				}
+			}
+		}
+
+		$results = $this->memcached->deleteMulti($delete_keys);
+
+		if (is_array($results)) {
+			foreach ($memcached_keys as $key => $memcached_key) {
+				if (!empty($results[$memcached_key])) {
+					$values[$key] = true;
+				}
+			}
 		}
 
 		return $values;
@@ -746,6 +805,7 @@ class WP_Object_Cache {
 			}
 
 			$unserializer = $this->unserializer;
+
 			return $unserializer($assembled);
 		}
 
