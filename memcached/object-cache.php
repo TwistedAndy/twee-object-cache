@@ -267,7 +267,21 @@ class WP_Object_Cache {
 			}
 		}
 
-		if (!$this->active and function_exists('add_action')) {
+		// Flush stale cache if the server was previously offline
+		$flag_file = __DIR__ . '/.ocflush';
+
+		if ($this->active) {
+			if (file_exists($flag_file)) {
+				$this->memcached->flush();
+				@unlink($flag_file);
+			}
+		} else {
+			// Mark the cache as offline to trigger a flush on next reconnect
+			if (!file_exists($flag_file)) {
+				@touch($flag_file);
+			}
+
+			if (function_exists('add_action')) {
 			add_action('admin_notices', function() {
 				$message = '<strong>Memcached Object Cache Error:</strong> Could not connect to any Memcached servers.';
 
@@ -277,6 +291,7 @@ class WP_Object_Cache {
 					echo '<div class="notice notice-error"><p>' . $message . '</p></div>';
 				}
 			});
+		}
 		}
 	}
 

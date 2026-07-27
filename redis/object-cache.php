@@ -255,9 +255,24 @@ class WP_Object_Cache {
 			} else {
 				$this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP);
 			}
+
+			// Flush stale cache if the server was previously offline
+			$flag_file = __DIR__ . '/.ocflush';
+
+			if (file_exists($flag_file)) {
+				$this->redis->flushDb();
+				@unlink($flag_file);
+			}
 		} catch (Exception $e) {
 			$this->active = false;
 			$error = $e->getMessage();
+
+			// Mark the cache as offline to trigger a flush on next reconnect
+			$flag_file = __DIR__ . '/.ocflush';
+
+			if (!file_exists($flag_file)) {
+				@touch($flag_file);
+			}
 
 			if (function_exists('add_action')) {
 				add_action('admin_notices', function() use ($error) {
