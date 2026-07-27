@@ -480,15 +480,24 @@ class WP_Object_Cache {
 			$options = ['xx'];
 			if ($expire > 0) {
 				$options['ex'] = $expire;
+			} else {
+				$options[] = 'keepttl';
 			}
-			$replaced = $this->redis->set($this->build_key($key, $group), $data, $options);
+
+			$cache_key = $this->build_key($key, $group);
+			$replaced = $this->redis->set($cache_key, $data, $options);
+
+			if ($replaced === false and $expire === 0 and $this->redis->getLastError()) {
+				$this->redis->clearLastError();
+				$replaced = $this->redis->set($cache_key, $data, ['xx']);
+			}
 
 			if ($replaced) {
 				$this->cache[$group][$key] = $data;
 				$this->cache_sets++;
 			}
 
-			return $replaced;
+			return (bool) $replaced;
 		}
 
 		return $this->set($key, $data, $group, $expire);
@@ -507,7 +516,15 @@ class WP_Object_Cache {
 			return $deleted_runtime;
 		}
 
-		return ((bool) $this->redis->del($this->build_key($key, $group)) or $deleted_runtime);
+		$cache_key = $this->build_key($key, $group);
+
+		if (method_exists($this->redis, 'unlink')) {
+			$deleted = (bool) $this->redis->unlink($cache_key);
+		} else {
+			$deleted = (bool) $this->redis->del($cache_key);
+		}
+
+		return ($deleted or $deleted_runtime);
 	}
 
 	public function delete_multiple(array $keys, string $group = 'default'): array
@@ -537,13 +554,22 @@ class WP_Object_Cache {
 			return $value;
 		}
 
-		if ($offset === 1) {
-			$value = $this->redis->incr($this->build_key($key, $group));
-		} else {
-			$value = $this->redis->incrBy($this->build_key($key, $group), $offset);
+		$cache_key = $this->build_key($key, $group);
+		$value = $this->redis->get($cache_key);
+
+		if ($value === false) {
+			return false;
 		}
 
-		if ($value !== false) {
+		$value = max(0, (int) $value + $offset);
+		$result = $this->redis->set($cache_key, $value, ['keepttl']);
+
+		if ($result === false and $this->redis->getLastError()) {
+			$this->redis->clearLastError();
+			$result = $this->redis->set($cache_key, $value);
+		}
+
+		if ($result) {
 			$this->cache[$group][$key] = $value;
 
 			return $value;
@@ -568,18 +594,21 @@ class WP_Object_Cache {
 		}
 
 		$cache_key = $this->build_key($key, $group);
+		$value = $this->redis->get($cache_key);
 
-		if ($offset === 1) {
-			$value = $this->redis->decr($cache_key);
-		} else {
-			$value = $this->redis->decrBy($cache_key, $offset);
+		if ($value === false) {
+			return false;
 		}
 
-		if ($value !== false) {
-			if ($value < 0) {
-				$this->redis->set($cache_key, 0);
-				$value = 0;
-			}
+		$value = max(0, (int) $value - $offset);
+		$result = $this->redis->set($cache_key, $value, ['keepttl']);
+
+		if ($result === false && $this->redis->getLastError()) {
+			$this->redis->clearLastError();
+			$result = $this->redis->set($cache_key, $value);
+		}
+
+		if ($result) {
 			$this->cache[$group][$key] = $value;
 
 			return $value;
@@ -593,7 +622,11 @@ class WP_Object_Cache {
 		$this->flush_runtime();
 
 		if ($this->active) {
-			$this->redis->flushDb();
+			try {
+				$this->redis->flushDb(true); // Async flush
+			} catch (Exception $e) {
+				$this->redis->flushDb();
+			}
 		}
 
 		return true;
