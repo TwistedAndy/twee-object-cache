@@ -230,6 +230,8 @@ class WP_Object_Cache {
 			$this->memcached->setOption(Memcached::OPT_BINARY_PROTOCOL, true);
 			$this->memcached->setOption(Memcached::OPT_TCP_NODELAY, true);
 			$this->memcached->setOption(Memcached::OPT_NO_BLOCK, true);
+			$this->memcached->setOption(Memcached::OPT_COMPRESSION, true);
+			$this->memcached->setOption(Memcached::OPT_COMPRESSION_TYPE, Memcached::COMPRESSION_FASTLZ);
 
 			if (Memcached::HAVE_IGBINARY) {
 				$this->memcached->setOption(Memcached::OPT_SERIALIZER, Memcached::SERIALIZER_IGBINARY);
@@ -292,7 +294,19 @@ class WP_Object_Cache {
 
 		// Check Memcached
 		$value = $this->memcached->get($this->build_key($key, $group));
+
 		if ($this->memcached->getResultCode() === Memcached::RES_SUCCESS) {
+			if (is_array($value) and isset($value['__chunk_list'])) {
+				$value = $this->get_chunked_value($value, $group);
+
+				if ($value === false) {
+					$this->cache_misses++;
+					$found = false;
+
+					return false;
+				}
+			}
+
 			$found = true;
 			$this->cache_hits++;
 			$this->cache[$group][$key] = $value; // Store in runtime for subsequent calls
@@ -336,9 +350,21 @@ class WP_Object_Cache {
 					$key = $key_map[$cache_key];
 
 					if (array_key_exists($cache_key, $cached_values)) {
+						$value = $cached_values[$cache_key];
+
+						if (is_array($value) and isset($value['__chunk_list'])) {
+							$value = $this->get_chunked_value($value, $group);
+
+							if ($value === false) {
+								$this->cache_misses++;
+								$values[$key] = false;
+								continue;
+							}
+						}
+
 						$this->cache_hits++;
-						$this->cache[$group][$key] = $cached_values[$cache_key];
-						$values[$key] = $cached_values[$cache_key];
+						$this->cache[$group][$key] = $value;
+						$values[$key] = $value;
 					} else {
 						$this->cache_misses++;
 						$values[$key] = false;
@@ -372,7 +398,13 @@ class WP_Object_Cache {
 			return true;
 		}
 
-		return $this->memcached->set($this->build_key($key, $group), $data, $expire);
+		$result = $this->memcached->set($this->build_key($key, $group), $data, $expire);
+
+		if (!$result and is_array($data) and $this->memcached->getResultCode() === Memcached::RES_E2BIG) {
+			return $this->set_chunked_value($key, $data, $group, $expire);
+		}
+
+		return $result;
 	}
 
 	public function set_multiple(array $data, string $group = 'default', int $expire = 0): array
@@ -646,6 +678,58 @@ class WP_Object_Cache {
 	private function build_key(int|string $key, string $group): string
 	{
 		return ($this->group_mapping[$group] ?? $this->build_group($group)) . ':' . $key;
+	}
+
+	/**
+	 * Resolves an array chunked payload back into a single array
+	 */
+	private function get_chunked_value(array $value, string $group): bool|array
+	{
+		if (!isset($value['__chunk_list'])) {
+			return false;
+		}
+
+		$cache_keys = [];
+
+		foreach ($value['__chunk_list'] as $chunk_key) {
+			$cache_keys[] = $this->build_key($chunk_key, $group);
+		}
+
+		$chunks = $this->memcached->getMulti($cache_keys);
+
+		if (is_array($chunks) and count($chunks) === count($cache_keys)) {
+			$assembled = [];
+
+			foreach ($cache_keys as $cache_key) {
+				foreach ($chunks[$cache_key] as $k => $v) {
+					$assembled[$k] = $v;
+				}
+			}
+
+			return $assembled;
+		}
+
+		return $value;
+	}
+
+	/**
+	 * Splits a massive array into chunks and stores them in Memcached
+	 */
+	private function set_chunked_value(int|string $key, array $data, string $group, int $expire): bool
+	{
+		$chunks = array_chunk($data, 500, true);
+		$chunk_keys = [];
+		$multi_set = [];
+
+		foreach ($chunks as $index => $chunk) {
+			$chunk_key = $key . '_chunk_' . $index;
+			$chunk_keys[] = $chunk_key;
+			$multi_set[$this->build_key($chunk_key, $group)] = $chunk;
+		}
+
+		$this->memcached->setMulti($multi_set, $expire);
+
+		return $this->memcached->set($this->build_key($key, $group), ['__chunk_list' => $chunk_keys], $expire);
 	}
 
 	/**
