@@ -258,10 +258,15 @@ class WP_Object_Cache {
 		$retry_interval = defined('WP_REDIS_RETRY_INTERVAL') ? WP_REDIS_RETRY_INTERVAL : 100;
 
 		try {
+
 			if (strpos($host, 'unix://') === 0 or strpos($host, '/') === 0) {
-				$this->redis->connect($host, 0, $timeout, null, $retry_interval);
+				$port = 0;
+			}
+
+			if (!defined('WP_REDIS_PERSISTENT_CONNECT') or WP_REDIS_PERSISTENT_CONNECT) {
+				$this->redis->pconnect($host, $port, $timeout, null, $retry_interval);
 			} else {
-				$this->redis->connect($host, (int) $port, $timeout, null, $retry_interval);
+				$this->redis->connect($host, $port, $timeout, null, $retry_interval);
 			}
 
 			if (defined('WP_REDIS_PASSWORD')) {
@@ -276,6 +281,16 @@ class WP_Object_Cache {
 				$this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_IGBINARY);
 			} else {
 				$this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP);
+			}
+
+			if (!defined('WP_REDIS_COMPRESSION') or WP_REDIS_COMPRESSION) {
+				if (defined('Redis::COMPRESSION_ZSTD')) {
+					$this->redis->setOption(Redis::OPT_COMPRESSION, Redis::COMPRESSION_ZSTD);
+				} elseif (defined('Redis::COMPRESSION_LZ4')) {
+					$this->redis->setOption(Redis::OPT_COMPRESSION, Redis::COMPRESSION_LZ4);
+				} elseif (defined('Redis::COMPRESSION_LZF')) {
+					$this->redis->setOption(Redis::OPT_COMPRESSION, Redis::COMPRESSION_LZF);
+				}
 			}
 
 			// Flush stale cache if the server was previously offline
