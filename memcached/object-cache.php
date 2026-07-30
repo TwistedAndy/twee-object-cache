@@ -187,11 +187,19 @@ class WP_Object_Cache {
 
 	public int $cache_sets = 0;
 
+	public int $cache_loads = 0;
+
 	private array $cache = [];
 
 	private array $global_groups = [];
 
 	private array $group_mapping = [];
+
+	private array $persistent_groups = [
+		'plugins' => true,
+		'themes'  => true,
+		'counts'  => true,
+	];
 
 	private array $non_persistent_groups = [];
 
@@ -213,6 +221,18 @@ class WP_Object_Cache {
 
 	public function __construct()
 	{
+		if (defined('WP_MEMCACHED_PERSISTENT_GROUPS')) {
+			$groups = is_string(WP_MEMCACHED_PERSISTENT_GROUPS) ? explode(',', WP_MEMCACHED_PERSISTENT_GROUPS) : WP_MEMCACHED_PERSISTENT_GROUPS;
+
+			if (is_array($groups)) {
+				$this->persistent_groups = [];
+
+				foreach ($groups as $group) {
+					$this->persistent_groups[trim($group)] = true;
+				}
+			}
+		}
+
 		if (function_exists('igbinary_serialize')) {
 			$this->serializer = 'igbinary_serialize';
 			$this->unserializer = 'igbinary_unserialize';
@@ -317,6 +337,8 @@ class WP_Object_Cache {
 			$this->cache[$group] = [];
 		}
 
+		$this->cache_loads++;
+
 		// Check Memcached
 		$value = $this->memcached->get($this->build_key($key, $group));
 
@@ -366,41 +388,45 @@ class WP_Object_Cache {
 			}
 		}
 
+		if (empty($cache_keys)) {
+			return $values;
+		}
+
+		$this->cache_loads++;
+
 		// Bulk fetch missing keys from Memcached
-		if (!empty($cache_keys)) {
-			$cached_values = $this->memcached->getMulti($cache_keys);
+		$cached_values = $this->memcached->getMulti($cache_keys);
 
-			if (is_array($cached_values)) {
-				foreach ($cache_keys as $cache_key) {
-					$key = $key_map[$cache_key];
+		if (is_array($cached_values)) {
+			foreach ($cache_keys as $cache_key) {
+				$key = $key_map[$cache_key];
 
-					if (array_key_exists($cache_key, $cached_values)) {
-						$value = $cached_values[$cache_key];
+				if (array_key_exists($cache_key, $cached_values)) {
+					$value = $cached_values[$cache_key];
 
-						if (is_array($value) and isset($value['__chunk_list'])) {
-							$value = $this->get_chunked_value($value, $group);
+					if (is_array($value) and isset($value['__chunk_list'])) {
+						$value = $this->get_chunked_value($value, $group);
 
-							if ($value === false) {
-								$this->cache_misses++;
-								$values[$key] = false;
-								continue;
-							}
+						if ($value === false) {
+							$this->cache_misses++;
+							$values[$key] = false;
+							continue;
 						}
-
-						$this->cache_hits++;
-						$this->cache[$group][$key] = $value;
-						$values[$key] = $value;
-					} else {
-						$this->cache_misses++;
-						$values[$key] = false;
 					}
-				}
-			} else {
-				foreach ($cache_keys as $cache_key) {
-					$key = $key_map[$cache_key];
+
+					$this->cache_hits++;
+					$this->cache[$group][$key] = $value;
+					$values[$key] = $value;
+				} else {
 					$this->cache_misses++;
 					$values[$key] = false;
 				}
+			}
+		} else {
+			foreach ($cache_keys as $cache_key) {
+				$key = $key_map[$cache_key];
+				$this->cache_misses++;
+				$values[$key] = false;
 			}
 		}
 
@@ -743,10 +769,14 @@ class WP_Object_Cache {
 	{
 		if (is_array($groups)) {
 			foreach ($groups as $group) {
-				$this->non_persistent_groups[(string) $group] = true;
+				if (!isset($this->persistent_groups[(string) $group])) {
+					$this->non_persistent_groups[(string) $group] = true;
+				}
 			}
 		} else {
-			$this->non_persistent_groups[$groups] = true;
+			if (!isset($this->persistent_groups[$groups])) {
+				$this->non_persistent_groups[$groups] = true;
+			}
 		}
 	}
 
@@ -767,6 +797,7 @@ class WP_Object_Cache {
 		echo '<p>';
 		echo '<strong>Engine:</strong> Memcached<br />';
 		echo '<strong>Cache Hits:</strong> ' . esc_html($this->cache_hits) . '<br />';
+		echo '<strong>Cache Loads:</strong> ' . esc_html($this->cache_loads) . '<br />';
 		echo '<strong>Cache Misses:</strong> ' . esc_html($this->cache_misses) . '<br />';
 		echo '<strong>Cache Sets:</strong> ' . esc_html($this->cache_sets) . '<br />';
 		echo '</p>';

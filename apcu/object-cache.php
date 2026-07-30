@@ -187,7 +187,15 @@ class WP_Object_Cache {
 
 	public int $cache_sets = 0;
 
+	public int $cache_loads = 0;
+
 	private array $cache = [];
+
+	private array $persistent_groups = [
+		'plugins' => true,
+		'themes'  => true,
+		'counts'  => true,
+	];
 
 	private array $global_groups = [];
 
@@ -205,6 +213,18 @@ class WP_Object_Cache {
 
 	public function __construct()
 	{
+		if (defined('WP_APCU_PERSISTENT_GROUPS')) {
+			$groups = is_string(WP_APCU_PERSISTENT_GROUPS) ? explode(',', WP_APCU_PERSISTENT_GROUPS) : WP_APCU_PERSISTENT_GROUPS;
+
+			if (is_array($groups)) {
+				$this->persistent_groups = [];
+
+				foreach ($groups as $group) {
+					$this->persistent_groups[trim($group)] = true;
+				}
+			}
+		}
+
 		if (is_multisite()) {
 			$this->multisite = true;
 			$this->blog_prefix = get_current_blog_id();
@@ -255,6 +275,8 @@ class WP_Object_Cache {
 		}
 
 		$cache_key = $this->build_key($key, $group);
+
+		$this->cache_loads++;
 
 		// Check APCu
 		$value = apcu_fetch($cache_key, $found);
@@ -527,10 +549,14 @@ class WP_Object_Cache {
 	{
 		if (is_array($groups)) {
 			foreach ($groups as $group) {
-				$this->non_persistent_groups[(string) $group] = true;
+				if (!isset($this->persistent_groups[(string) $group])) {
+					$this->non_persistent_groups[(string) $group] = true;
+				}
 			}
 		} else {
-			$this->non_persistent_groups[$groups] = true;
+			if (!isset($this->persistent_groups[$groups])) {
+				$this->non_persistent_groups[$groups] = true;
+			}
 		}
 	}
 
@@ -550,6 +576,7 @@ class WP_Object_Cache {
 		echo '<p>';
 		echo '<strong>Engine:</strong> APCu<br />';
 		echo '<strong>Cache Hits:</strong> ' . esc_html($this->cache_hits) . '<br />';
+		echo '<strong>Cache Loads:</strong> ' . esc_html($this->cache_loads) . '<br />';
 		echo '<strong>Cache Misses:</strong> ' . esc_html($this->cache_misses) . '<br />';
 		echo '<strong>Cache Sets:</strong> ' . esc_html($this->cache_sets) . '<br />';
 		echo '</p>';

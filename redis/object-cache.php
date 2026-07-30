@@ -187,6 +187,8 @@ class WP_Object_Cache {
 
 	public int $cache_sets = 0;
 
+	public int $cache_loads = 0;
+
 	private array $cache = [];
 
 	private array $global_groups = [];
@@ -227,8 +229,10 @@ class WP_Object_Cache {
 			}
 		}
 
-		$this->multisite = is_multisite();
-		$this->blog_prefix = $this->multisite ? get_current_blog_id() . ':' : '';
+		if (is_multisite()) {
+			$this->multisite = true;
+			$this->blog_prefix = get_current_blog_id();
+		}
 
 		if (defined('WP_CACHE_KEY_SALT')) {
 			$this->key_salt = WP_CACHE_KEY_SALT;
@@ -328,6 +332,8 @@ class WP_Object_Cache {
 			$this->cache[$group] = [];
 		}
 
+		$this->cache_loads++;
+
 		// Check Redis
 		$value = $this->redis->hGet($this->build_group($group), $key);
 
@@ -387,6 +393,8 @@ class WP_Object_Cache {
 		$group_key = $this->build_group($group);
 		$cached_values = $this->redis->hMGet($group_key, $key_map);
 
+		$this->cache_loads++;
+
 		if (is_array($cached_values)) {
 			foreach ($key_map as $key) {
 				$cached_value = $cached_values[$key] ?? false;
@@ -403,7 +411,7 @@ class WP_Object_Cache {
 						$values[$key] = false;
 						continue;
 					}
-					
+
 					$cached_value = $cached_value['_d'];
 				}
 
@@ -795,6 +803,7 @@ class WP_Object_Cache {
 		echo '<p>';
 		echo '<strong>Engine:</strong> Redis<br />';
 		echo '<strong>Cache Hits:</strong> ' . esc_html($this->cache_hits) . '<br />';
+		echo '<strong>Cache Loads:</strong> ' . esc_html($this->cache_loads) . '<br />';
 		echo '<strong>Cache Misses:</strong> ' . esc_html($this->cache_misses) . '<br />';
 		echo '<strong>Cache Sets:</strong> ' . esc_html($this->cache_sets) . '<br />';
 		echo '</p>';
