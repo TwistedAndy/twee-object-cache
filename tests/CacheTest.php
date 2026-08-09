@@ -1175,4 +1175,58 @@ class CacheTest extends TestCase {
 		$this->assertSame('value', wp_cache_get('ss_key', 'ss_scoped'));
 	}
 
+	public function test_set_with_oversized_user_key_round_trips(): void
+	{
+		$key = str_repeat('k', 300);
+
+		wp_cache_set($key, 'value', 'oversized');
+
+		$this->assertSame('value', wp_cache_get($key, 'oversized'));
+	}
+
+	public function test_set_with_oversized_user_key_does_not_break_subsequent_operations(): void
+	{
+		$key = str_repeat('k', 300);
+
+		wp_cache_set($key, 'value', 'oversized');
+		wp_cache_set('normal_key', 'normal_value', 'oversized');
+
+		$this->assertSame('value', wp_cache_get($key, 'oversized'));
+		$this->assertSame('normal_value', wp_cache_get('normal_key', 'oversized'));
+	}
+
+	public function test_two_different_oversized_keys_with_same_prefix_are_distinct(): void
+	{
+		$key_a = str_repeat('a', 300);
+		$key_b = str_repeat('a', 299) . 'b';
+
+		wp_cache_set($key_a, 'A', 'oversized');
+		wp_cache_set($key_b, 'B', 'oversized');
+
+		$this->assertSame('A', wp_cache_get($key_a, 'oversized'));
+		$this->assertSame('B', wp_cache_get($key_b, 'oversized'));
+	}
+
+	public function test_set_with_oversized_group_name_round_trips(): void
+	{
+		$group = str_repeat('g', 240);
+
+		wp_cache_set('key', 'value', $group);
+
+		$this->assertSame('value', wp_cache_get('key', $group));
+	}
+
+	public function test_flush_group_with_oversized_group_name_clears_keys(): void
+	{
+		$group = str_repeat('g', 240);
+
+		wp_cache_set('flush_long_a', 'A', $group);
+		wp_cache_set('flush_long_b', 'B', $group);
+
+		wp_cache_flush_group($group);
+
+		$this->assertFalse(wp_cache_get('flush_long_a', $group));
+		$this->assertFalse(wp_cache_get('flush_long_b', $group));
+	}
+
 }

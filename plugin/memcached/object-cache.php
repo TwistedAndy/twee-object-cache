@@ -834,7 +834,13 @@ class WP_Object_Cache {
 			$prefix = $this->blog_prefix;
 		}
 
-		$version_key = $this->key_salt . ':group:' . $prefix . $group;
+		$namespaced_group = $prefix . $group;
+
+		if (strlen($namespaced_group) > 100) {
+			$namespaced_group = substr($namespaced_group, 0, 100);
+		}
+
+		$version_key = $this->key_salt . ':group:' . $namespaced_group;
 		$version = $this->memcached->increment($version_key);
 
 		if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
@@ -847,7 +853,7 @@ class WP_Object_Cache {
 		}
 
 		// Map the new version in the runtime property
-		$this->group_mapping[$group] = $this->key_salt . ':' . $prefix . $group . ':' . $version;
+		$this->group_mapping[$group] = $this->key_salt . ':' . $namespaced_group . ':' . $version;
 
 		return true;
 	}
@@ -917,6 +923,12 @@ class WP_Object_Cache {
 	 */
 	private function build_key(int|string $key, string $group): string
 	{
+		// Memcached rejects keys longer than 250 bytes, so
+		// we limit groups to 80 and keys to 160 characters
+		if (strlen($key) > 150) {
+			$key = substr($key, 0, 150) . substr(hash('sha256', (string) $key), 0, 10);
+		}
+
 		return ($this->group_mapping[$group] ?? $this->build_group($group)) . ':' . $key;
 	}
 
@@ -989,7 +1001,13 @@ class WP_Object_Cache {
 			$prefix = $this->blog_prefix;
 		}
 
-		$version_key = $this->key_salt . ':group:' . $prefix . $group;
+		$namespaced_group = $prefix . $group;
+
+		if (strlen($namespaced_group) > 70) {
+			$namespaced_group = substr($namespaced_group, 0, 70) . substr(hash('sha256', $group), 0, 10);
+		}
+
+		$version_key = $this->key_salt . ':group:' . $namespaced_group;
 		$version_number = $this->memcached->get($version_key);
 		$code = $this->memcached->getResultCode();
 
@@ -1006,7 +1024,7 @@ class WP_Object_Cache {
 			}
 		}
 
-		$cache_group = $this->key_salt . ':' . $prefix . $group . ':' . $version_number;
+		$cache_group = $this->key_salt . ':' . $namespaced_group . ':' . $version_number;
 
 		$this->group_mapping[$group] = $cache_group;
 
