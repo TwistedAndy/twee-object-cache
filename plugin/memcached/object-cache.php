@@ -233,11 +233,6 @@ class WP_Object_Cache {
 			}
 		}
 
-		if (function_exists('igbinary_serialize')) {
-			$this->serializer = 'igbinary_serialize';
-			$this->unserializer = 'igbinary_unserialize';
-		}
-
 		if (is_multisite()) {
 			$this->multisite = true;
 			$this->blog_prefix = get_current_blog_id() . ':';
@@ -257,13 +252,23 @@ class WP_Object_Cache {
 		$this->memcached = new Memcached('wp_object_cache_pool');
 
 		if (empty($this->memcached->getServerList())) {
+			$this->memcached->setOption(Memcached::OPT_NO_BLOCK, false);
+			$this->memcached->setOption(Memcached::OPT_NOREPLY, false);
+			$this->memcached->setOption(Memcached::OPT_BUFFER_WRITES, false);
 			$this->memcached->setOption(Memcached::OPT_BINARY_PROTOCOL, true);
-			$this->memcached->setOption(Memcached::OPT_TCP_NODELAY, true);
+			$this->memcached->setOption(Memcached::OPT_CONNECT_TIMEOUT, 100);
+			$this->memcached->setOption(Memcached::OPT_SEND_TIMEOUT, 100000);
+			$this->memcached->setOption(Memcached::OPT_RECV_TIMEOUT, 100000);
+
 			$this->memcached->setOption(Memcached::OPT_COMPRESSION, true);
 			$this->memcached->setOption(Memcached::OPT_COMPRESSION_TYPE, Memcached::COMPRESSION_FASTLZ);
 
-			if (Memcached::HAVE_IGBINARY) {
+			if (defined('WP_MEMCACHED_IGBINARY') and WP_MEMCACHED_IGBINARY and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
 				$this->memcached->setOption(Memcached::OPT_SERIALIZER, Memcached::SERIALIZER_IGBINARY);
+				$this->serializer = 'igbinary_serialize';
+				$this->unserializer = 'igbinary_unserialize';
+			} else {
+				$this->memcached->setOption(Memcached::OPT_SERIALIZER, Memcached::SERIALIZER_PHP);
 			}
 
 			global $memcached_servers;
@@ -343,7 +348,7 @@ class WP_Object_Cache {
 		$code = $this->memcached->getResultCode();
 
 		if ($code === Memcached::RES_SUCCESS) {
-			if (is_array($value) and isset($value['__chunk_list'])) {
+			if (is_array($value) and !empty($value['__chunk_list']) and is_array($value['__chunk_list'])) {
 				$value = $this->get_chunked_value($value, $group);
 
 				if ($value === false) {
@@ -409,7 +414,7 @@ class WP_Object_Cache {
 				if (array_key_exists($cache_key, $cached_values)) {
 					$value = $cached_values[$cache_key];
 
-					if (is_array($value) and isset($value['__chunk_list'])) {
+					if (is_array($value) and !empty($value['__chunk_list']) and is_array($value['__chunk_list'])) {
 						$value = $this->get_chunked_value($value, $group);
 
 						if ($value === false) {
@@ -528,8 +533,6 @@ class WP_Object_Cache {
 		$code = $this->memcached->getResultCode();
 
 		if ($code === Memcached::RES_SUCCESS) {
-			$this->cache[$group][$key] = $existing;
-
 			return false;
 		}
 
@@ -615,11 +618,11 @@ class WP_Object_Cache {
 			$this->handle_error($this->memcached->getResultMessage());
 		}
 
-		if (is_array($value) and isset($value['__chunk_list'])) {
+		if (is_array($value) and !empty($value['__chunk_list']) and is_array($value['__chunk_list'])) {
 			$chunk_keys = [];
 
 			foreach ($value['__chunk_list'] as $chunk_key) {
-				$chunk_keys[] = $this->build_key($chunk_key, $group);
+				$chunk_keys[] = $this->build_key((string) $chunk_key, $group);
 			}
 
 			if (!empty($chunk_keys)) {
@@ -678,9 +681,9 @@ class WP_Object_Cache {
 		}
 
 		foreach ($raw_values as $raw_value) {
-			if (is_array($raw_value) and isset($raw_value['__chunk_list'])) {
+			if (is_array($raw_value) and !empty($raw_value['__chunk_list']) and is_array($raw_value['__chunk_list'])) {
 				foreach ($raw_value['__chunk_list'] as $chunk_key) {
-					$delete_keys[] = $this->build_key($chunk_key, $group);
+					$delete_keys[] = $this->build_key((string) $chunk_key, $group);
 				}
 			}
 		}
@@ -937,14 +940,14 @@ class WP_Object_Cache {
 	 */
 	private function get_chunked_value(array $value, string $group): bool|array
 	{
-		if (!isset($value['__chunk_list'])) {
+		if (empty($value['__chunk_list']) or !is_array($value['__chunk_list'])) {
 			return false;
 		}
 
 		$cache_keys = [];
 
 		foreach ($value['__chunk_list'] as $chunk_key) {
-			$cache_keys[] = $this->build_key($chunk_key, $group);
+			$cache_keys[] = $this->build_key((string) $chunk_key, $group);
 		}
 
 		$chunks = $this->memcached->getMulti($cache_keys);
