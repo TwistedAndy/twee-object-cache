@@ -328,12 +328,7 @@ class WP_Object_Cache {
 	public function get(int|string $key, string $group = 'default', bool|null $force = false, &$found = null): mixed
 	{
 		// Check runtime cache first
-		if ($force) {
-			// Force a fresh read from Redis: drop any stale runtime entry
-			if (isset($this->cache[$group])) {
-				unset($this->cache[$group][$key]);
-			}
-		} elseif (isset($this->cache[$group]) and array_key_exists($key, $this->cache[$group])) {
+		if (!$force and isset($this->cache[$group]) and array_key_exists($key, $this->cache[$group])) {
 			$found = true;
 			$this->cache_hits++;
 
@@ -346,6 +341,11 @@ class WP_Object_Cache {
 			$this->cache_misses++;
 
 			return false;
+		}
+
+		// Force a fresh read from Redis: drop any stale runtime entry
+		if ($force and isset($this->cache[$group])) {
+			unset($this->cache[$group][$key]);
 		}
 
 		if (!isset($this->cache[$group])) {
@@ -490,7 +490,7 @@ class WP_Object_Cache {
 		} catch (Exception $e) {
 			$this->handle_error($e);
 
-			return true;
+			return false;
 		}
 
 		return $result !== false;
@@ -499,7 +499,6 @@ class WP_Object_Cache {
 	public function set_multiple(array $data, string $group = 'default', int $expire = 0): array
 	{
 		$values = [];
-		$cache_values = [];
 
 		$is_cached_group = ($this->active and !isset($this->non_persistent_groups[$group]));
 
@@ -507,12 +506,6 @@ class WP_Object_Cache {
 			$this->cache[$group][$key] = $value;
 			$this->cache_sets++;
 			$values[$key] = true;
-
-			if ($value === false) {
-				$cache_values[$key] = ['_d' => false];
-			} else {
-				$cache_values[$key] = $value;
-			}
 		}
 
 		while (count($this->cache[$group]) > $this->runtime_cache_limit) {
@@ -520,23 +513,34 @@ class WP_Object_Cache {
 			unset($this->cache[$group][key($this->cache[$group])]);
 		}
 
-		if ($is_cached_group and !empty($cache_values)) {
-			$group_key = $this->build_group($group);
+		if (!$is_cached_group) {
+			return $values;
+		}
 
+		$cache_values = [];
+
+		foreach ($data as $key => $value) {
 			if ($expire > 0) {
-				$time = time() + $expire;
-				foreach ($cache_values as $key => $value) {
-					$cache_values[$key] = [
-						'_t' => $time,
-						'_d' => $value,
-					];
-				}
+				$cache_values[$key] = [
+					'_t' => time() + $expire,
+					'_d' => $value,
+				];
+			} elseif ($value === false) {
+				$cache_values[$key] = ['_d' => false];
+			} else {
+				$cache_values[$key] = $value;
 			}
+		}
 
-			try {
-				$this->redis->hMSet($group_key, $cache_values);
-			} catch (Exception $e) {
-				$this->handle_error($e);
+		$group_key = $this->build_group($group);
+
+		try {
+			$this->redis->hMSet($group_key, $cache_values);
+		} catch (Exception $e) {
+			$this->handle_error($e);
+
+			foreach ($values as $key => $_) {
+				$values[$key] = false;
 			}
 		}
 
@@ -585,8 +589,7 @@ class WP_Object_Cache {
 				// Key already exists, check if it's expired
 				$existing = $this->redis->hGet($group_key, $key);
 
-				if (is_array($existing) and array_key_exists('_d', $existing)
-					and isset($existing['_t']) and time() > (int) $existing['_t']) {
+				if (is_array($existing) and array_key_exists('_d', $existing) and isset($existing['_t']) and time() > (int) $existing['_t']) {
 					// It's expired, so we are allowed to overwrite it
 					$added = $this->redis->hSet($group_key, $key, $data_to_store) !== false;
 				} else {
@@ -595,6 +598,7 @@ class WP_Object_Cache {
 			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
+			$added = false;
 		}
 
 		if ($added) {
@@ -636,8 +640,7 @@ class WP_Object_Cache {
 				if ($this->redis->hExists($group_key, $key)) {
 					$existing = $this->redis->hGet($group_key, $key);
 
-					if (!(is_array($existing) and array_key_exists('_d', $existing)
-						and isset($existing['_t']) and time() > (int) $existing['_t'])) {
+					if (!(is_array($existing) and array_key_exists('_d', $existing) and isset($existing['_t']) and time() > (int) $existing['_t'])) {
 						if ($expire > 0) {
 							$data_to_store = [
 								'_t' => time() + $expire,
@@ -654,7 +657,7 @@ class WP_Object_Cache {
 				}
 			} catch (Exception $e) {
 				$this->handle_error($e);
-				$replaced = true;
+				$replaced = false;
 			}
 
 			if ($replaced) {
@@ -685,6 +688,7 @@ class WP_Object_Cache {
 			$deleted = (bool) $this->redis->hDel($this->build_group($group), $key);
 		} catch (Exception $e) {
 			$this->handle_error($e);
+
 			return $deleted_runtime;
 		}
 
@@ -707,12 +711,11 @@ class WP_Object_Cache {
 		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
-			if ($value === false) {
+			if ($value === false or !is_numeric($value)) {
 				return false;
 			}
 
-			$value = max(0, (int) $value + $offset);
-
+			$value = (int) $value + $offset;
 			$this->cache[$group][$key] = $value;
 
 			return $value;
@@ -728,20 +731,23 @@ class WP_Object_Cache {
 			}
 
 			if (is_array($value) and array_key_exists('_d', $value)) {
-				if (isset($value['_t']) and time() > (int) $value['_t']) {
+				if (!is_numeric($value['_d']) or (isset($value['_t']) and time() > (int) $value['_t'])) {
 					return false;
 				}
 
-				$new_value = max(0, (int) $value['_d'] + $offset);
+				$new_value = (int) $value['_d'] + $offset;
 				$value['_d'] = $new_value;
 				$this->redis->hSet($group_key, $key, $value);
 				$value = $new_value;
+			} elseif (!is_numeric($value)) {
+				return false;
 			} else {
-				$value = max(0, (int) $value + $offset);
+				$value = (int) $value + $offset;
 				$this->redis->hSet($group_key, $key, $value);
 			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
+
 			return false;
 		}
 
@@ -755,11 +761,11 @@ class WP_Object_Cache {
 		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
-			if ($value === false) {
+			if ($value === false or !is_numeric($value)) {
 				return false;
 			}
 
-			$value = max(0, (int) $value - $offset);
+			$value = (int) $value - $offset;
 			$this->cache[$group][$key] = $value;
 
 			return $value;
@@ -775,20 +781,23 @@ class WP_Object_Cache {
 			}
 
 			if (is_array($value) and array_key_exists('_d', $value)) {
-				if (isset($value['_t']) and time() > (int) $value['_t']) {
+				if (!is_numeric($value['_d']) or (isset($value['_t']) and time() > (int) $value['_t'])) {
 					return false;
 				}
 
-				$new_value = max(0, (int) $value['_d'] - $offset);
+				$new_value = (int) $value['_d'] - $offset;
 				$value['_d'] = $new_value;
 				$this->redis->hSet($group_key, $key, $value);
 				$value = $new_value;
+			} elseif (!is_numeric($value)) {
+				return false;
 			} else {
-				$value = max(0, (int) $value - $offset);
+				$value = (int) $value - $offset;
 				$this->redis->hSet($group_key, $key, $value);
 			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
+
 			return false;
 		}
 
@@ -801,12 +810,16 @@ class WP_Object_Cache {
 	{
 		$this->flush_runtime();
 
-		if ($this->active) {
-			try {
-				$this->redis->flushDb(true); // Async flush
-			} catch (Exception $e) {
-				$this->handle_error($e);
-			}
+		if (!$this->active) {
+			return true;
+		}
+
+		try {
+			$this->redis->flushDb(true); // Async flush
+		} catch (Exception $e) {
+			$this->handle_error($e);
+
+			return false;
 		}
 
 		return true;
@@ -838,6 +851,8 @@ class WP_Object_Cache {
 			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
+
+			return false;
 		}
 
 		return true;

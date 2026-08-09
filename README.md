@@ -33,13 +33,6 @@ This repository contains caching plugins for three different backends: **APCu**,
 - Automatically isolates cache keys using the blog ID prefix to prevent data bleeding across the network.
 - Context-aware key prefixing ensures CLI, Cron, and web requests all target the identical caching environment.
 
-### 5. Safe Cache Flushing & Iteration
-
-- Utilizes O(1) group versioning (namespaces) for instant, non-blocking cache invalidation in Memcached.
-- The **Redis** implementation achieves true instant cache group invalidation by dropping entire Redis Hashes directly (via non-blocking `UNLINK`), completely bypassing the need for fallback key versioning.
-- Actively prevents memory leaks and stale bloat ("ghost keys") by automatically cleaning up orphaned chunk payloads and harvested keys during individual deletions and group flushes.
-- Flushes only the keys belonging to the specific WordPress installation using dynamic key salts, preventing conflicts with other applications or sites running on the same server.
-
 ## Installation
 
 Twee Object Cache can be installed as a standard WordPress plugin or as a manual drop-in.

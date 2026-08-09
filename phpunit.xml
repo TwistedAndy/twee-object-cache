@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         cacheDirectory="tests/build"
+>
+	<coverage
+		includeUncoveredFiles="true"
+		pathCoverage="false"
+		ignoreDeprecatedCodeUnits="true"
+		disableCodeCoverageIgnore="true">
+		<report>
+			<clover outputFile="tests/build/clover.xml"/>
+			<php outputFile="tests/build/coverage.serialized"/>
+			<text outputFile="php://stdout" showUncoveredFiles="false"/>
+		</report>
+	</coverage>
+	<source>
+		<include>
+			<directory suffix=".php">./plugin</directory>
+		</include>
+	</source>
+	<testsuites>
+		<testsuite name="Object Cache">
+			<file>tests/CacheTest.php</file>
+		</testsuite>
+	</testsuites>
+	<php>
+		<server name="TW_CACHE_ENGINE" value="redis"/>
+		<server name="TW_CACHE_KEY_SALT" value="twee_tests"/>
+	</php>
+</phpunit>

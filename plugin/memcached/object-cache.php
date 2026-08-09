@@ -259,7 +259,6 @@ class WP_Object_Cache {
 		if (empty($this->memcached->getServerList())) {
 			$this->memcached->setOption(Memcached::OPT_BINARY_PROTOCOL, true);
 			$this->memcached->setOption(Memcached::OPT_TCP_NODELAY, true);
-			$this->memcached->setOption(Memcached::OPT_NO_BLOCK, true);
 			$this->memcached->setOption(Memcached::OPT_COMPRESSION, true);
 			$this->memcached->setOption(Memcached::OPT_COMPRESSION_TYPE, Memcached::COMPRESSION_FASTLZ);
 
@@ -521,9 +520,28 @@ class WP_Object_Cache {
 			return true;
 		}
 
-		$added = $this->memcached->add($this->build_key($key, $group), $data, (int) $expire);
+		$memcached_key = $this->build_key($key, $group);
 
-		if (!$added and $this->memcached->getResultCode() !== Memcached::RES_NOTSTORED) {
+		// Memcached::add() with OPT_NO_BLOCK may not reliably return false
+		// when the key already exists, so verify backend presence first.
+		$existing = $this->memcached->get($memcached_key);
+		$code = $this->memcached->getResultCode();
+
+		if ($code === Memcached::RES_SUCCESS) {
+			$this->cache[$group][$key] = $existing;
+
+			return false;
+		}
+
+		if ($code !== Memcached::RES_NOTFOUND) {
+			$this->handle_error($this->memcached->getResultMessage());
+
+			return false;
+		}
+
+		$added = $this->memcached->set($memcached_key, $data, (int) $expire);
+
+		if (!$added and $this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
 			$this->handle_error($this->memcached->getResultMessage());
 		}
 
@@ -559,7 +577,7 @@ class WP_Object_Cache {
 		if (!isset($this->non_persistent_groups[$group]) and $this->active) {
 			$replaced = $this->memcached->replace($this->build_key($key, $group), $data, (int) $expire);
 
-			if (!$replaced and $this->memcached->getResultCode() !== Memcached::RES_NOTSTORED) {
+			if (!$replaced and $this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
 				$this->handle_error($this->memcached->getResultMessage());
 			}
 
@@ -671,7 +689,7 @@ class WP_Object_Cache {
 
 		if (is_array($results)) {
 			foreach ($memcached_keys as $key => $memcached_key) {
-				if (!empty($results[$memcached_key])) {
+				if (!empty($results[$memcached_key]) and $values[$key] !== false) {
 					$values[$key] = true;
 				}
 			}
@@ -693,7 +711,7 @@ class WP_Object_Cache {
 				return false;
 			}
 
-			$value = max(0, (int) $value + $offset);
+			$value = (int) $value + $offset;
 
 			$this->cache[$group][$key] = $value;
 
@@ -709,7 +727,7 @@ class WP_Object_Cache {
 			return $value;
 		}
 
-		if ($code !== Memcached::RES_NOTFOUND) {
+		if ($code !== Memcached::RES_NOTFOUND and $code !== Memcached::RES_UNKNOWN_READ_FAILURE) {
 			$this->handle_error($this->memcached->getResultMessage());
 		}
 
@@ -725,27 +743,38 @@ class WP_Object_Cache {
 				return false;
 			}
 
-			$value = max(0, (int) $value - $offset);
+			$value = (int) $value - $offset;
 			$this->cache[$group][$key] = $value;
 
 			return $value;
 		}
 
-		// Memcached handles decrementing natively and never drops below 0
-		$value = $this->memcached->decrement($this->build_key($key, $group), $offset);
+		$cache_key = $this->build_key($key, $group);
+
+		// Memcached's native decrement clamps to 0; use a get/modify/set cycle
+		// so the counter can go negative (matching WP core behavior).
+		$current = $this->memcached->get($cache_key);
 		$code = $this->memcached->getResultCode();
 
-		if ($code === Memcached::RES_SUCCESS) {
-			$this->cache[$group][$key] = $value;
-
-			return $value;
+		if ($code === Memcached::RES_NOTFOUND) {
+			return false;
 		}
 
-		if ($code !== Memcached::RES_NOTFOUND) {
+		if ($code !== Memcached::RES_SUCCESS) {
 			$this->handle_error($this->memcached->getResultMessage());
+
+			return false;
 		}
 
-		return false;
+		if (!is_numeric($current)) {
+			return false;
+		}
+
+		$value = (int) $current - $offset;
+		$this->memcached->set($cache_key, (string) $value);
+		$this->cache[$group][$key] = $value;
+
+		return $value;
 	}
 
 	public function flush(): bool

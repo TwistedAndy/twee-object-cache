@@ -433,17 +433,21 @@ class WP_Object_Cache {
 		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
-			if ($value === false) {
+			if ($value === false or !is_numeric($value)) {
 				return false;
 			}
 
-			$value = max(0, (int) $value + $offset);
+			$value = (int) $value + $offset;
 			$this->cache[$group][$key] = $value;
 
 			return $value;
 		}
 
 		$cache_key = $this->build_key($key, $group);
+
+		if (!apcu_exists($cache_key)) {
+			return false;
+		}
 
 		$success = false;
 		$value = apcu_inc($cache_key, $offset, $success);
@@ -466,11 +470,11 @@ class WP_Object_Cache {
 		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
-			if ($value === false) {
+			if ($value === false or !is_numeric($value)) {
 				return false;
 			}
 
-			$value = max(0, (int) $value - $offset);
+			$value = (int) $value - $offset;
 			$this->cache[$group][$key] = $value;
 
 			return $value;
@@ -478,17 +482,16 @@ class WP_Object_Cache {
 
 		$cache_key = $this->build_key($key, $group);
 
+		if (!apcu_exists($cache_key)) {
+			return false;
+		}
+
 		$success = false;
 
 		// APCu handles decrementing natively
 		$value = apcu_dec($cache_key, $offset, $success);
 
 		if ($success) {
-			// Ensure it doesn't drop below 0 to match WP core behavior
-			if ($value < 0) {
-				apcu_store($cache_key, 0);
-				$value = 0;
-			}
 			$this->cache[$group][$key] = $value;
 
 			return $value;
