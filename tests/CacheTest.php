@@ -1229,4 +1229,463 @@ class CacheTest extends TestCase {
 		$this->assertFalse(wp_cache_get('flush_long_b', $group));
 	}
 
+	/**
+	 * Reads one of the drop-in's public counter properties (cache_hits,
+	 * cache_misses, cache_loads, cache_sets). These counters are part of
+	 * the engine contract the suite asserts against.
+	 */
+	private function cacheCounter(string $name): int
+	{
+		return (int) $GLOBALS['wp_object_cache']->{$name};
+	}
+
+	/**
+	 * Resets the hit/miss/load counters without touching stored values so a
+	 * test can scope its assertions to a known baseline.
+	 */
+	private function resetCacheCounters(): void
+	{
+		$cache = $GLOBALS['wp_object_cache'];
+
+		$cache->cache_hits = 0;
+		$cache->cache_misses = 0;
+		$cache->cache_loads = 0;
+		$cache->cache_sets = 0;
+	}
+
+	public function test_miss(): void
+	{
+		$this->resetCacheCounters();
+
+		$this->assertFalse(wp_cache_get('miss_key'));
+
+		$this->assertSame(0, $this->cacheCounter('cache_hits'));
+		$this->assertSame(1, $this->cacheCounter('cache_misses'));
+		$this->assertSame(1, $this->cacheCounter('cache_loads'));
+	}
+
+	public function test_add_get(): void
+	{
+		wp_cache_add('add_get_key', 'value');
+
+		$this->resetCacheCounters();
+
+		$this->assertSame('value', wp_cache_get('add_get_key'));
+
+		$this->assertSame(1, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_add_get_0(): void
+	{
+		wp_cache_add('add_zero_key', 0);
+
+		$this->resetCacheCounters();
+
+		$this->assertSame(0, wp_cache_get('add_zero_key'));
+
+		$this->assertSame(1, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_add_get_null(): void
+	{
+		$this->assertTrue(wp_cache_add('add_null_key', null));
+
+		$this->resetCacheCounters();
+
+		$this->assertNull(wp_cache_get('add_null_key'));
+
+		$this->assertSame(1, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_already_exists_internal(): void
+	{
+		wp_cache_set('internal_key', 'alpha');
+
+		// Drop the runtime entry so the next get() is forced to consult the
+		// backend. We then expect a single hit and exactly one load.
+		wp_cache_flush_runtime();
+
+		$this->resetCacheCounters();
+
+		$this->assertSame('alpha', wp_cache_get('internal_key'));
+
+		$this->assertSame(1, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+		$this->assertSame(1, $this->cacheCounter('cache_loads'));
+
+		// A second get() must be served entirely from the runtime layer.
+		$loadsAfterFirst = $this->cacheCounter('cache_loads');
+
+		$this->assertSame('alpha', wp_cache_get('internal_key'));
+
+		$this->assertSame(2, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+		$this->assertSame($loadsAfterFirst, $this->cacheCounter('cache_loads'));
+	}
+
+	public function test_get_missing_persistent(): void
+	{
+		$this->resetCacheCounters();
+
+		wp_cache_get('persistent_missing_a');
+		wp_cache_get('persistent_missing_a');
+		wp_cache_get('persistent_missing_b');
+
+		$this->assertSame(0, $this->cacheCounter('cache_hits'));
+		$this->assertSame(3, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_true_value_persistent_cache(): void
+	{
+		wp_cache_set('true_value_key', true);
+
+		wp_cache_flush_runtime();
+
+		$this->resetCacheCounters();
+
+		$found = null;
+		$value = wp_cache_get('true_value_key', 'default', false, $found);
+
+		$this->assertTrue($value);
+		$this->assertTrue($found);
+		$this->assertSame(1, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_null_value_persistent_cache(): void
+	{
+		wp_cache_set('null_value_key', null);
+
+		wp_cache_flush_runtime();
+
+		$this->resetCacheCounters();
+
+		$found = null;
+		$value = wp_cache_get('null_value_key', 'default', false, $found);
+
+		$this->assertNull($value);
+		$this->assertTrue($found, 'A stored null value must be distinguishable from a miss via $found.');
+		$this->assertSame(1, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_int_values_persistent_cache(): void
+	{
+		wp_cache_set('int_small_key', 123);
+		wp_cache_set('int_large_key', 2147483647);
+
+		wp_cache_flush_runtime();
+
+		$this->resetCacheCounters();
+
+		$this->assertSame(123, wp_cache_get('int_small_key'));
+		$this->assertSame(2147483647, wp_cache_get('int_large_key'));
+
+		$this->assertSame(2, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_float_values_persistent_cache(): void
+	{
+		wp_cache_set('float_a_key', 123.456);
+		wp_cache_set('float_b_key', +0123.45e6);
+
+		wp_cache_flush_runtime();
+
+		$this->resetCacheCounters();
+
+		$this->assertSame(123.456, wp_cache_get('float_a_key'));
+		$this->assertSame(123450000.0, wp_cache_get('float_b_key'));
+
+		$this->assertSame(2, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_string_values_persistent_cache(): void
+	{
+		wp_cache_set('str_plain_key', 'a plain old string');
+		// The remaining keys are numeric strings. They must NOT be coerced
+		// to int or float by the backend serializer.
+		wp_cache_set('str_int_key', '42');
+		wp_cache_set('str_float_key', '123.456');
+		wp_cache_set('str_sci_key', '+0123.45e6');
+
+		wp_cache_flush_runtime();
+
+		$this->resetCacheCounters();
+
+		$this->assertSame('a plain old string', wp_cache_get('str_plain_key'));
+		$this->assertSame('42', wp_cache_get('str_int_key'));
+		$this->assertSame('123.456', wp_cache_get('str_float_key'));
+		$this->assertSame('+0123.45e6', wp_cache_get('str_sci_key'));
+
+		$this->assertSame(4, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_array_values_persistent_cache(): void
+	{
+		$value = ['one', 2, true];
+
+		wp_cache_set('array_value_key', $value);
+
+		wp_cache_flush_runtime();
+
+		$this->resetCacheCounters();
+
+		$this->assertSame($value, wp_cache_get('array_value_key'));
+
+		$this->assertSame(1, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_object_values_persistent_cache(): void
+	{
+		$value = new stdClass();
+		$value->one = 'two';
+		$value->three = 'four';
+
+		wp_cache_set('object_value_key', $value);
+
+		wp_cache_flush_runtime();
+
+		$this->resetCacheCounters();
+
+		$this->assertEquals($value, wp_cache_get('object_value_key'));
+
+		$this->assertSame(1, $this->cacheCounter('cache_hits'));
+		$this->assertSame(0, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_multiple_partial_cache_miss(): void
+	{
+		wp_cache_set('partial_a', 'A', 'partial_group');
+		wp_cache_set('partial_b', 'B', 'partial_group');
+		wp_cache_set('partial_c', 'C', 'partial_group');
+
+		// Drop the runtime layer so every key must be resolved through the
+		// backend, then re-prime one key in memory to exercise the mixed
+		// hit-from-runtime / miss-from-backend path.
+		wp_cache_flush_runtime();
+		wp_cache_get('partial_b', 'partial_group');
+
+		$this->resetCacheCounters();
+
+		$results = wp_cache_get_multiple(
+			['partial_a', 'partial_b', 'partial_c', 'partial_missing'],
+			'partial_group'
+		);
+
+		$this->assertSame('A', $results['partial_a']);
+		$this->assertSame('B', $results['partial_b']);
+		$this->assertSame('C', $results['partial_c']);
+		$this->assertFalse($results['partial_missing']);
+
+		// Three keys resolved (one from runtime, two from backend) and one
+		// miss for the absent key.
+		$this->assertSame(3, $this->cacheCounter('cache_hits'));
+		$this->assertSame(1, $this->cacheCounter('cache_misses'));
+	}
+
+	public function test_get_multiple_non_persistent(): void
+	{
+		wp_cache_add_non_persistent_groups('np_multi');
+
+		wp_cache_set('np_m1', 'one', 'np_multi');
+		wp_cache_set('np_m2', 'two', 'np_multi');
+
+		$this->resetCacheCounters();
+
+		$results = wp_cache_get_multiple(['np_m1', 'np_m2', 'np_m3'], 'np_multi');
+
+		$this->assertSame('one', $results['np_m1']);
+		$this->assertSame('two', $results['np_m2']);
+		$this->assertFalse($results['np_m3']);
+
+		$this->assertSame(2, $this->cacheCounter('cache_hits'));
+		$this->assertSame(1, $this->cacheCounter('cache_misses'));
+		// Non-persistent groups must never touch the backend.
+		$this->assertSame(0, $this->cacheCounter('cache_loads'));
+	}
+
+	public function test_incr_separate_groups(): void
+	{
+		// Missing keys increment to false in either group; the two groups
+		// must not share state.
+		$this->assertFalse(wp_cache_incr('incr_sep', 1, 'sep_g1'));
+		$this->assertFalse(wp_cache_incr('incr_sep', 1, 'sep_g2'));
+
+		wp_cache_set('incr_sep', 0, 'sep_g1');
+		wp_cache_set('incr_sep', 0, 'sep_g2');
+
+		$this->assertSame(1, wp_cache_incr('incr_sep', 1, 'sep_g1'));
+		$this->assertSame(1, wp_cache_incr('incr_sep', 1, 'sep_g2'));
+
+		$this->assertSame(1, wp_cache_get('incr_sep', 'sep_g1'));
+		$this->assertSame(1, wp_cache_get('incr_sep', 'sep_g2'));
+
+		// Bumping one group must not leak into the other.
+		$this->assertSame(3, wp_cache_incr('incr_sep', 2, 'sep_g1'));
+		$this->assertSame(2, wp_cache_incr('incr_sep', 1, 'sep_g2'));
+
+		$this->assertSame(3, wp_cache_get('incr_sep', 'sep_g1'));
+		$this->assertSame(2, wp_cache_get('incr_sep', 'sep_g2'));
+	}
+
+	public function test_decr_separate_groups(): void
+	{
+		$this->assertFalse(wp_cache_decr('decr_sep', 1, 'sep_g1'));
+		$this->assertFalse(wp_cache_decr('decr_sep', 1, 'sep_g2'));
+
+		wp_cache_set('decr_sep', 3, 'sep_g1');
+		wp_cache_set('decr_sep', 2, 'sep_g2');
+
+		$this->assertSame(2, wp_cache_decr('decr_sep', 1, 'sep_g1'));
+		$this->assertSame(1, wp_cache_decr('decr_sep', 1, 'sep_g2'));
+
+		$this->assertSame(2, wp_cache_get('decr_sep', 'sep_g1'));
+		$this->assertSame(1, wp_cache_get('decr_sep', 'sep_g2'));
+
+		$this->assertSame(0, wp_cache_decr('decr_sep', 2, 'sep_g1'));
+		$this->assertSame(0, wp_cache_decr('decr_sep', 1, 'sep_g2'));
+
+		$this->assertSame(0, wp_cache_get('decr_sep', 'sep_g1'));
+		$this->assertSame(0, wp_cache_get('decr_sep', 'sep_g2'));
+	}
+
+	public function test_decr_non_persistent(): void
+	{
+		wp_cache_add_non_persistent_groups('np_decr');
+
+		// Missing key in a non-persistent group must report a miss.
+		$this->assertFalse(wp_cache_decr('np_decr_key', 1, 'np_decr'));
+
+		wp_cache_set('np_decr_key', 0, 'np_decr');
+		$this->assertSame(-1, wp_cache_decr('np_decr_key', 1, 'np_decr'));
+
+		wp_cache_set('np_decr_key', 3, 'np_decr');
+		$this->assertSame(2, wp_cache_decr('np_decr_key', 1, 'np_decr'));
+
+		$this->assertSame(0, wp_cache_decr('np_decr_key', 2, 'np_decr'));
+		$this->assertSame(0, wp_cache_get('np_decr_key', 'np_decr'));
+
+		// Non-persistent groups must never reach the backend.
+		$this->assertSame(0, $this->cacheCounter('cache_loads'));
+	}
+
+	public function test_add_succeeds_after_unsuspend(): void
+	{
+		wp_suspend_cache_addition(true);
+
+		try {
+			$this->assertFalse(wp_cache_add('suspended_key', 'value'));
+			$this->assertFalse(wp_cache_get('suspended_key'));
+		} finally {
+			wp_suspend_cache_addition(false);
+		}
+
+		// After unsuspending, additions must work again for new keys and the
+		// previously-attempted key must not be silently present.
+		$this->assertTrue(wp_cache_add('suspended_key', 'value'));
+		$this->assertSame('value', wp_cache_get('suspended_key'));
+	}
+
+	public function test_add_after_delete_reuses_key(): void
+	{
+		// Full lifecycle: set, get, delete, get (miss), add with the same key,
+		// get the new value. Guards against implementations that mark a key
+		// as deleted in a way that blocks subsequent adds.
+		$this->assertTrue(wp_cache_set('reuse_key', 'first'));
+		$this->assertSame('first', wp_cache_get('reuse_key'));
+
+		$this->assertTrue(wp_cache_delete('reuse_key'));
+		$this->assertFalse(wp_cache_get('reuse_key'));
+
+		$this->assertTrue(wp_cache_add('reuse_key', 'second'));
+		$this->assertSame('second', wp_cache_get('reuse_key'));
+	}
+
+	public function test_set_with_long_expiration_round_trips(): void
+	{
+		// 30 days in seconds. Some drop-ins misinterpret values this large as
+		// Unix timestamps and expire the entry immediately. The drop-in must
+		// treat the argument as a TTL in seconds from now.
+		$expiration = 60 * 60 * 24 * 30;
+
+		$this->assertTrue(wp_cache_set('long_exp_set', 'value', 'long_exp_group', $expiration));
+		$this->assertSame('value', wp_cache_get('long_exp_set', 'long_exp_group'));
+	}
+
+	public function test_add_with_long_expiration_round_trips(): void
+	{
+		$expiration = 60 * 60 * 24 * 30;
+
+		$this->assertTrue(wp_cache_add('long_exp_add', 'value', 'long_exp_group', $expiration));
+		$this->assertSame('value', wp_cache_get('long_exp_add', 'long_exp_group'));
+	}
+
+	public function test_replace_with_long_expiration_round_trips(): void
+	{
+		$expiration = 60 * 60 * 24 * 30;
+
+		$this->assertTrue(wp_cache_set('long_exp_rep', 'first', 'long_exp_group'));
+		$this->assertTrue(wp_cache_replace('long_exp_rep', 'second', 'long_exp_group', $expiration));
+		$this->assertSame('second', wp_cache_get('long_exp_rep', 'long_exp_group'));
+	}
+
+	public function test_short_ttl_expires(): void
+	{
+		// 1s TTL with a 2s sleep leaves a clear margin past the expiry.
+		// A single sleep covers all three writers (set, add, replace) so the
+		// suite doesn't pay the cost three times over.
+		$cases = [
+			'set'     => 'ttl_set_key',
+			'add'     => 'ttl_add_key',
+			'replace' => 'ttl_rep_key',
+		];
+
+		// Seed the replace() target without a TTL so replace() has something
+		// to overwrite before applying its 1s TTL.
+		wp_cache_set($cases['replace'], 'first', 'ttl_group');
+
+		$this->assertTrue(wp_cache_set($cases['set'], 'set_value', 'ttl_group', 1));
+		$this->assertTrue(wp_cache_add($cases['add'], 'add_value', 'ttl_group', 1));
+		$this->assertTrue(wp_cache_replace($cases['replace'], 'rep_value', 'ttl_group', 1));
+
+		// Every writer's value must be readable before the TTL elapses.
+		$found = null;
+		$this->assertSame('set_value', wp_cache_get($cases['set'], 'ttl_group', false, $found));
+		$this->assertTrue($found);
+
+		$found = null;
+		$this->assertSame('add_value', wp_cache_get($cases['add'], 'ttl_group', false, $found));
+		$this->assertTrue($found);
+
+		$found = null;
+		$this->assertSame('rep_value', wp_cache_get($cases['replace'], 'ttl_group', false, $found));
+		$this->assertTrue($found);
+
+		sleep(2);
+
+		// The runtime layer still holds every value, so the next get() would
+		// happily return the stale copies. Flush it to force a backend read
+		// where the TTL is actually enforced.
+		wp_cache_flush_runtime();
+
+		foreach ($cases as $writer => $key) {
+			$found = true;
+			$this->assertFalse(
+				wp_cache_get($key, 'ttl_group', false, $found),
+				"{$writer}() with a 1s TTL must expire after sleep(2)."
+			);
+			$this->assertFalse(
+				$found,
+				"An expired {$writer}() value must be reported as a miss via \$found."
+			);
+		}
+	}
+
 }
