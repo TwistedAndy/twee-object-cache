@@ -61,7 +61,7 @@ function wp_cache_set_multiple(array $data, $group = 'default', $expire = 0)
 	return $wp_object_cache->set_multiple($data, $group, (int) $expire);
 }
 
-function wp_cache_get($key, $group = '', $force = false, &$found = null)
+function wp_cache_get($key, $group = 'default', $force = false, &$found = null)
 {
 	global $wp_object_cache;
 
@@ -227,7 +227,7 @@ class WP_Object_Cache {
 
 		if (is_multisite()) {
 			$this->multisite = true;
-			$this->blog_prefix = get_current_blog_id();
+			$this->blog_prefix = get_current_blog_id() . ':';
 		}
 
 		if (defined('WP_CACHE_KEY_SALT')) {

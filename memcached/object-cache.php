@@ -240,7 +240,7 @@ class WP_Object_Cache {
 
 		if (is_multisite()) {
 			$this->multisite = true;
-			$this->blog_prefix = get_current_blog_id();
+			$this->blog_prefix = get_current_blog_id() . ':';
 		}
 
 		if (defined('WP_CACHE_KEY_SALT')) {
