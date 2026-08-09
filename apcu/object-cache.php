@@ -324,6 +324,10 @@ class WP_Object_Cache {
 		$stored = apcu_store($cache_key, $data, (int) $expire);
 
 		if (!$stored) {
+			if (!apcu_enabled()) {
+				$this->handle_error('apcu_enabled() returned false after failed apcu_store()');
+				return false;
+			}
 			apcu_delete($cache_key);
 		}
 
@@ -450,6 +454,10 @@ class WP_Object_Cache {
 			return $value;
 		}
 
+		if (!apcu_enabled()) {
+			$this->handle_error('apcu_enabled() returned false after failed apcu_inc()');
+		}
+
 		return false;
 	}
 
@@ -484,6 +492,10 @@ class WP_Object_Cache {
 			$this->cache[$group][$key] = $value;
 
 			return $value;
+		}
+
+		if (!apcu_enabled()) {
+			$this->handle_error('apcu_enabled() returned false after failed apcu_dec()');
 		}
 
 		return false;
@@ -580,6 +592,17 @@ class WP_Object_Cache {
 		echo '<strong>Cache Misses:</strong> ' . esc_html($this->cache_misses) . '<br />';
 		echo '<strong>Cache Sets:</strong> ' . esc_html($this->cache_sets) . '<br />';
 		echo '</p>';
+	}
+
+	/**
+	 * Deactivate the cache for the rest of a request and trigger
+	 * a failure via trigger_error() with WP_DEBUG support
+	 */
+	private function handle_error(string $message): void
+	{
+		$this->active = false;
+
+		trigger_error('Twee APCu Object Cache: ' . $message, E_USER_WARNING);
 	}
 
 	/**

@@ -328,7 +328,12 @@ class WP_Object_Cache {
 	public function get(int|string $key, string $group = 'default', bool|null $force = false, &$found = null): mixed
 	{
 		// Check runtime cache first
-		if (!$force and isset($this->cache[$group]) and array_key_exists($key, $this->cache[$group])) {
+		if ($force) {
+			// Force a fresh read from Redis: drop any stale runtime entry
+			if (isset($this->cache[$group])) {
+				unset($this->cache[$group][$key]);
+			}
+		} elseif (isset($this->cache[$group]) and array_key_exists($key, $this->cache[$group])) {
 			$found = true;
 			$this->cache_hits++;
 
@@ -349,27 +354,30 @@ class WP_Object_Cache {
 
 		$this->cache_loads++;
 
-		// Check Redis
-		$value = $this->redis->hGet($this->build_group($group), $key);
+		try {
+			$value = $this->redis->hGet($this->build_group($group), $key);
 
-		if ($value !== false) {
-			// Values with TTL are stored as array with _t storing the expiry time and _d storing the data
-			if (is_array($value) and isset($value['_t']) and array_key_exists('_d', $value)) {
-				if (time() > (int) $value['_t']) {
-					$found = false;
-					$this->cache_misses++;
+			if ($value !== false) {
+				// Values with TTL and boolean falses are stored as an array
+				if (is_array($value) and array_key_exists('_d', $value)) {
+					if (isset($value['_t']) and time() > (int) $value['_t']) {
+						$found = false;
+						$this->cache_misses++;
 
-					return false;
-				} else {
+						return false;
+					}
+
 					$value = $value['_d'];
 				}
+
+				$found = true;
+				$this->cache_hits++;
+				$this->cache[$group][$key] = $value;
+
+				return $value;
 			}
-
-			$found = true;
-			$this->cache_hits++;
-			$this->cache[$group][$key] = $value; // Store in runtime for subsequent calls
-
-			return $value;
+		} catch (Exception $e) {
+			$this->handle_error($e);
 		}
 
 		$found = false;
@@ -406,7 +414,13 @@ class WP_Object_Cache {
 
 		$time = time();
 		$group_key = $this->build_group($group);
-		$cached_values = $this->redis->hMGet($group_key, $key_map);
+
+		try {
+			$cached_values = $this->redis->hMGet($group_key, $key_map);
+		} catch (Exception $e) {
+			$this->handle_error($e);
+			$cached_values = false;
+		}
 
 		$this->cache_loads++;
 
@@ -420,8 +434,8 @@ class WP_Object_Cache {
 					continue;
 				}
 
-				if (is_array($cached_value) and isset($cached_value['_t']) and array_key_exists('_d', $cached_value)) {
-					if ($time > (int) $cached_value['_t']) {
+				if (is_array($cached_value) and array_key_exists('_d', $cached_value)) {
+					if (isset($cached_value['_t']) and $time > (int) $cached_value['_t']) {
 						$this->cache_misses++;
 						$values[$key] = false;
 						continue;
@@ -465,9 +479,19 @@ class WP_Object_Cache {
 				'_t' => time() + $expire,
 				'_d' => $data,
 			];
+		} elseif ($data === false) {
+			$data = [
+				'_d' => false
+			];
 		}
 
-		$result = $this->redis->hSet($this->build_group($group), $key, $data);
+		try {
+			$result = $this->redis->hSet($this->build_group($group), $key, $data);
+		} catch (Exception $e) {
+			$this->handle_error($e);
+
+			return true;
+		}
 
 		return $result !== false;
 	}
@@ -483,7 +507,12 @@ class WP_Object_Cache {
 			$this->cache[$group][$key] = $value;
 			$this->cache_sets++;
 			$values[$key] = true;
-			$cache_values[$key] = $value;
+
+			if ($value === false) {
+				$cache_values[$key] = ['_d' => false];
+			} else {
+				$cache_values[$key] = $value;
+			}
 		}
 
 		while (count($this->cache[$group]) > $this->runtime_cache_limit) {
@@ -492,10 +521,10 @@ class WP_Object_Cache {
 		}
 
 		if ($is_cached_group and !empty($cache_values)) {
-			$time = time() + $expire;
 			$group_key = $this->build_group($group);
 
 			if ($expire > 0) {
+				$time = time() + $expire;
 				foreach ($cache_values as $key => $value) {
 					$cache_values[$key] = [
 						'_t' => $time,
@@ -504,7 +533,11 @@ class WP_Object_Cache {
 				}
 			}
 
-			$this->redis->hMSet($group_key, $cache_values);
+			try {
+				$this->redis->hMSet($group_key, $cache_values);
+			} catch (Exception $e) {
+				$this->handle_error($e);
+			}
 		}
 
 		return $values;
@@ -536,24 +569,32 @@ class WP_Object_Cache {
 				'_t' => time() + $expire,
 				'_d' => $data,
 			];
+		} elseif ($data === false) {
+			$data_to_store = ['_d' => false];
 		} else {
 			$data_to_store = $data;
 		}
 
 		$group_key = $this->build_group($group);
 
-		// Use atomic hSetNx for the primary insertion to prevent race conditions
-		if ($this->redis->hSetNx($group_key, $key, $data_to_store)) {
-			$added = true;
-		} else {
-			// Key already exists, check if it's expired
-			$existing = $this->redis->hGet($group_key, $key);
-			if (is_array($existing) and isset($existing['_t']) and time() > (int) $existing['_t']) {
-				// It's expired, so we are allowed to overwrite it
-				$added = $this->redis->hSet($group_key, $key, $data_to_store) !== false;
-			} else {
-				$added = false;
+		$added = true;
+
+		try {
+			// Use atomic hSetNx for the primary insertion to prevent race conditions
+			if (!$this->redis->hSetNx($group_key, $key, $data_to_store)) {
+				// Key already exists, check if it's expired
+				$existing = $this->redis->hGet($group_key, $key);
+
+				if (is_array($existing) and array_key_exists('_d', $existing)
+					and isset($existing['_t']) and time() > (int) $existing['_t']) {
+					// It's expired, so we are allowed to overwrite it
+					$added = $this->redis->hSet($group_key, $key, $data_to_store) !== false;
+				} else {
+					$added = false;
+				}
 			}
+		} catch (Exception $e) {
+			$this->handle_error($e);
 		}
 
 		if ($added) {
@@ -589,25 +630,31 @@ class WP_Object_Cache {
 
 		if ($is_cached_group) {
 			$group_key = $this->build_group($group);
+			$replaced = false;
 
-			if ($this->redis->hExists($group_key, $key)) {
-				$existing = $this->redis->hGet($group_key, $key);
-				if (is_array($existing) and isset($existing['_t']) and time() > (int) $existing['_t']) {
-					$replaced = false;
-				} else {
-					if ($expire > 0) {
-						$data_to_store = [
-							'_t' => time() + $expire,
-							'_d' => $data,
-						];
-					} else {
-						$data_to_store = $data;
+			try {
+				if ($this->redis->hExists($group_key, $key)) {
+					$existing = $this->redis->hGet($group_key, $key);
+
+					if (!(is_array($existing) and array_key_exists('_d', $existing)
+						and isset($existing['_t']) and time() > (int) $existing['_t'])) {
+						if ($expire > 0) {
+							$data_to_store = [
+								'_t' => time() + $expire,
+								'_d' => $data,
+							];
+						} elseif ($data === false) {
+							$data_to_store = ['_d' => false];
+						} else {
+							$data_to_store = $data;
+						}
+						$this->redis->hSet($group_key, $key, $data_to_store);
+						$replaced = true;
 					}
-					$this->redis->hSet($group_key, $key, $data_to_store);
-					$replaced = true;
 				}
-			} else {
-				$replaced = false;
+			} catch (Exception $e) {
+				$this->handle_error($e);
+				$replaced = true;
 			}
 
 			if ($replaced) {
@@ -634,7 +681,12 @@ class WP_Object_Cache {
 			return $deleted_runtime;
 		}
 
-		$deleted = (bool) $this->redis->hDel($this->build_group($group), $key);
+		try {
+			$deleted = (bool) $this->redis->hDel($this->build_group($group), $key);
+		} catch (Exception $e) {
+			$this->handle_error($e);
+			return $deleted_runtime;
+		}
 
 		return ($deleted or $deleted_runtime);
 	}
@@ -667,24 +719,30 @@ class WP_Object_Cache {
 		}
 
 		$group_key = $this->build_group($group);
-		$value = $this->redis->hGet($group_key, $key);
 
-		if ($value === false) {
-			return false;
-		}
+		try {
+			$value = $this->redis->hGet($group_key, $key);
 
-		if (is_array($value) and isset($value['_t']) and array_key_exists('_d', $value)) {
-			if (time() > (int) $value['_t']) {
+			if ($value === false) {
 				return false;
 			}
 
-			$new_value = max(0, (int) $value['_d'] + $offset);
-			$value['_d'] = $new_value;
-			$this->redis->hSet($group_key, $key, $value);
-			$value = $new_value;
-		} else {
-			$value = max(0, (int) $value + $offset);
-			$this->redis->hSet($group_key, $key, $value);
+			if (is_array($value) and array_key_exists('_d', $value)) {
+				if (isset($value['_t']) and time() > (int) $value['_t']) {
+					return false;
+				}
+
+				$new_value = max(0, (int) $value['_d'] + $offset);
+				$value['_d'] = $new_value;
+				$this->redis->hSet($group_key, $key, $value);
+				$value = $new_value;
+			} else {
+				$value = max(0, (int) $value + $offset);
+				$this->redis->hSet($group_key, $key, $value);
+			}
+		} catch (Exception $e) {
+			$this->handle_error($e);
+			return false;
 		}
 
 		$this->cache[$group][$key] = $value;
@@ -708,24 +766,30 @@ class WP_Object_Cache {
 		}
 
 		$group_key = $this->build_group($group);
-		$value = $this->redis->hGet($group_key, $key);
 
-		if ($value === false) {
-			return false;
-		}
+		try {
+			$value = $this->redis->hGet($group_key, $key);
 
-		if (is_array($value) and isset($value['_t']) and array_key_exists('_d', $value)) {
-			if (time() > (int) $value['_t']) {
+			if ($value === false) {
 				return false;
 			}
 
-			$new_value = max(0, (int) $value['_d'] - $offset);
-			$value['_d'] = $new_value;
-			$this->redis->hSet($group_key, $key, $value);
-			$value = $new_value;
-		} else {
-			$value = max(0, (int) $value - $offset);
-			$this->redis->hSet($group_key, $key, $value);
+			if (is_array($value) and array_key_exists('_d', $value)) {
+				if (isset($value['_t']) and time() > (int) $value['_t']) {
+					return false;
+				}
+
+				$new_value = max(0, (int) $value['_d'] - $offset);
+				$value['_d'] = $new_value;
+				$this->redis->hSet($group_key, $key, $value);
+				$value = $new_value;
+			} else {
+				$value = max(0, (int) $value - $offset);
+				$this->redis->hSet($group_key, $key, $value);
+			}
+		} catch (Exception $e) {
+			$this->handle_error($e);
+			return false;
 		}
 
 		$this->cache[$group][$key] = $value;
@@ -741,7 +805,7 @@ class WP_Object_Cache {
 			try {
 				$this->redis->flushDb(true); // Async flush
 			} catch (Exception $e) {
-				$this->redis->flushDb();
+				$this->handle_error($e);
 			}
 		}
 
@@ -766,10 +830,14 @@ class WP_Object_Cache {
 
 		$group_key = $this->build_group($group);
 
-		if (method_exists($this->redis, 'unlink')) {
-			$this->redis->unlink($group_key);
-		} else {
-			$this->redis->del($group_key);
+		try {
+			if (method_exists($this->redis, 'unlink')) {
+				$this->redis->unlink($group_key);
+			} else {
+				$this->redis->del($group_key);
+			}
+		} catch (Exception $e) {
+			$this->handle_error($e);
 		}
 
 		return true;
@@ -822,6 +890,17 @@ class WP_Object_Cache {
 		echo '<strong>Cache Misses:</strong> ' . esc_html($this->cache_misses) . '<br />';
 		echo '<strong>Cache Sets:</strong> ' . esc_html($this->cache_sets) . '<br />';
 		echo '</p>';
+	}
+
+	/**
+	 * Deactivate the cache for the rest of a request and trigger
+	 * a failure via trigger_error() with WP_DEBUG support
+	 */
+	private function handle_error(Exception $e): void
+	{
+		$this->active = false;
+
+		trigger_error('Twee Redis Object Cache: ' . $e->getMessage(), E_USER_NOTICE);
 	}
 
 	private function build_group(string $group = 'default'): string

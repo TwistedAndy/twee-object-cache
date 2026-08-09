@@ -341,8 +341,9 @@ class WP_Object_Cache {
 
 		// Check Memcached
 		$value = $this->memcached->get($this->build_key($key, $group));
+		$code = $this->memcached->getResultCode();
 
-		if ($this->memcached->getResultCode() === Memcached::RES_SUCCESS) {
+		if ($code === Memcached::RES_SUCCESS) {
 			if (is_array($value) and isset($value['__chunk_list'])) {
 				$value = $this->get_chunked_value($value, $group);
 
@@ -361,7 +362,12 @@ class WP_Object_Cache {
 			return $value;
 		}
 
+		if ($code !== Memcached::RES_NOTFOUND) {
+			$this->handle_error($this->memcached->getResultMessage());
+		}
+
 		$this->cache_misses++;
+		$found = false;
 
 		return false;
 	}
@@ -451,8 +457,12 @@ class WP_Object_Cache {
 
 		$result = $this->memcached->set($this->build_key($key, $group), $data, $expire);
 
-		if (!$result and $this->memcached->getResultCode() === Memcached::RES_E2BIG) {
-			return $this->set_chunked_value($key, $data, $group, $expire);
+		if (!$result) {
+			if ($this->memcached->getResultCode() === Memcached::RES_E2BIG) {
+				return $this->set_chunked_value($key, $data, $group, $expire);
+			}
+
+			$this->handle_error($this->memcached->getResultMessage());
 		}
 
 		return $result;
@@ -481,6 +491,10 @@ class WP_Object_Cache {
 
 		if (!empty($cache_values)) {
 			$this->memcached->setMulti($cache_values, (int) $expire);
+
+			if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
+				$this->handle_error($this->memcached->getResultMessage());
+			}
 		}
 
 		return $values;
@@ -508,6 +522,10 @@ class WP_Object_Cache {
 		}
 
 		$added = $this->memcached->add($this->build_key($key, $group), $data, (int) $expire);
+
+		if (!$added and $this->memcached->getResultCode() !== Memcached::RES_NOTSTORED) {
+			$this->handle_error($this->memcached->getResultMessage());
+		}
 
 		if ($added) {
 			$this->cache[$group][$key] = $data;
@@ -540,6 +558,11 @@ class WP_Object_Cache {
 
 		if (!isset($this->non_persistent_groups[$group]) and $this->active) {
 			$replaced = $this->memcached->replace($this->build_key($key, $group), $data, (int) $expire);
+
+			if (!$replaced and $this->memcached->getResultCode() !== Memcached::RES_NOTSTORED) {
+				$this->handle_error($this->memcached->getResultMessage());
+			}
+
 			if ($replaced) {
 				$this->cache[$group][$key] = $data;
 				$this->cache_sets++;
@@ -568,6 +591,11 @@ class WP_Object_Cache {
 
 		// Check if the item is chunked before deleting
 		$value = $this->memcached->get($memcached_key);
+		$code = $this->memcached->getResultCode();
+
+		if ($code !== Memcached::RES_SUCCESS and $code !== Memcached::RES_NOTFOUND) {
+			$this->handle_error($this->memcached->getResultMessage());
+		}
 
 		if (is_array($value) and isset($value['__chunk_list'])) {
 			$chunk_keys = [];
@@ -581,7 +609,14 @@ class WP_Object_Cache {
 			}
 		}
 
-		return ($this->memcached->delete($memcached_key) or $deleted_runtime);
+		$deleted = $this->memcached->delete($memcached_key);
+		$code = $this->memcached->getResultCode();
+
+		if (!$deleted and $code !== Memcached::RES_NOTFOUND) {
+			$this->handle_error($this->memcached->getResultMessage());
+		}
+
+		return ($deleted or $deleted_runtime);
 	}
 
 	public function delete_multiple(array $keys, string $group = 'default'): array
@@ -614,7 +649,15 @@ class WP_Object_Cache {
 
 		$delete_keys = array_values($memcached_keys);
 
-		$raw_values = $this->memcached->getMulti($delete_keys) ? : [];
+		$raw_values = $this->memcached->getMulti($delete_keys);
+
+		if (!is_array($raw_values)) {
+			if ($this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
+				$this->handle_error($this->memcached->getResultMessage());
+			}
+
+			$raw_values = [];
+		}
 
 		foreach ($raw_values as $raw_value) {
 			if (is_array($raw_value) and isset($raw_value['__chunk_list'])) {
@@ -631,6 +674,10 @@ class WP_Object_Cache {
 				if (!empty($results[$memcached_key])) {
 					$values[$key] = true;
 				}
+			}
+		} else {
+			if ($this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
+				$this->handle_error($this->memcached->getResultMessage());
 			}
 		}
 
@@ -654,11 +701,16 @@ class WP_Object_Cache {
 		}
 
 		$value = $this->memcached->increment($this->build_key($key, $group), $offset);
+		$code = $this->memcached->getResultCode();
 
-		if ($this->memcached->getResultCode() === Memcached::RES_SUCCESS) {
+		if ($code === Memcached::RES_SUCCESS) {
 			$this->cache[$group][$key] = $value;
 
 			return $value;
+		}
+
+		if ($code !== Memcached::RES_NOTFOUND) {
+			$this->handle_error($this->memcached->getResultMessage());
 		}
 
 		return false;
@@ -681,11 +733,16 @@ class WP_Object_Cache {
 
 		// Memcached handles decrementing natively and never drops below 0
 		$value = $this->memcached->decrement($this->build_key($key, $group), $offset);
+		$code = $this->memcached->getResultCode();
 
-		if ($this->memcached->getResultCode() === Memcached::RES_SUCCESS) {
+		if ($code === Memcached::RES_SUCCESS) {
 			$this->cache[$group][$key] = $value;
 
 			return $value;
+		}
+
+		if ($code !== Memcached::RES_NOTFOUND) {
+			$this->handle_error($this->memcached->getResultMessage());
 		}
 
 		return false;
@@ -697,6 +754,10 @@ class WP_Object_Cache {
 
 		if ($this->active) {
 			$this->memcached->flush();
+
+			if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
+				$this->handle_error($this->memcached->getResultMessage());
+			}
 		}
 
 		return true;
@@ -732,6 +793,10 @@ class WP_Object_Cache {
 		// Clean up the harvested keys from Memcached to minimize stale memory bloat
 		if (!empty($keys_to_delete)) {
 			$this->memcached->deleteMulti($keys_to_delete);
+
+			if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
+				$this->handle_error($this->memcached->getResultMessage());
+			}
 		}
 
 		if (isset($this->global_groups[$group])) {
@@ -746,6 +811,10 @@ class WP_Object_Cache {
 		if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
 			$version = 1;
 			$this->memcached->set($version_key, $version);
+
+			if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
+				$this->handle_error($this->memcached->getResultMessage());
+			}
 		}
 
 		// Map the new version in the runtime property
@@ -801,6 +870,17 @@ class WP_Object_Cache {
 		echo '<strong>Cache Misses:</strong> ' . esc_html($this->cache_misses) . '<br />';
 		echo '<strong>Cache Sets:</strong> ' . esc_html($this->cache_sets) . '<br />';
 		echo '</p>';
+	}
+
+	/**
+	 * Deactivate the cache for the rest of a request and trigger
+	 * a failure via trigger_error() with WP_DEBUG support
+	 */
+	private function handle_error(string $message): void
+	{
+		$this->active = false;
+
+		trigger_error('Twee Memcached Object Cache: ' . $message, E_USER_WARNING);
 	}
 
 	/**
@@ -882,10 +962,19 @@ class WP_Object_Cache {
 
 		$version_key = $this->key_salt . ':group:' . $prefix . $group;
 		$version_number = $this->memcached->get($version_key);
+		$code = $this->memcached->getResultCode();
 
-		if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
+		if ($code !== Memcached::RES_SUCCESS) {
+			if ($code !== Memcached::RES_NOTFOUND) {
+				$this->handle_error($this->memcached->getResultMessage());
+			}
+
 			$version_number = 0;
 			$this->memcached->set($version_key, $version_number);
+
+			if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
+				$this->handle_error($this->memcached->getResultMessage());
+			}
 		}
 
 		$cache_group = $this->key_salt . ':' . $prefix . $group . ':' . $version_number;
