@@ -55,6 +55,12 @@ Twee Object Cache can be installed as a standard WordPress plugin or as a manual
 
 All configuration is automatic, but you can explicitly define your cache salt in `wp-config.php` to guarantee prefix consistency across different execution environments (like WP-CLI).
 
+For Memcached, the following optional constants override connection timeouts. Values are in milliseconds; the defaults are 250 ms:
+
+- `WP_MEMCACHED_CONNECT_TIMEOUT`
+- `WP_MEMCACHED_SEND_TIMEOUT`
+- `WP_MEMCACHED_RECV_TIMEOUT`
+
 ## About
 
 Author: Andrii Toniievych

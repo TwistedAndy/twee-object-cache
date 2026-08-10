@@ -193,6 +193,19 @@ function twee_object_cache_is_reachable($ext): bool
 		}
 
 		$memcached = new Memcached();
+		$connect_timeout = defined('WP_MEMCACHED_CONNECT_TIMEOUT') ? (int) WP_MEMCACHED_CONNECT_TIMEOUT : 250;
+		$send_timeout = defined('WP_MEMCACHED_SEND_TIMEOUT') ? (int) WP_MEMCACHED_SEND_TIMEOUT : 250;
+		$recv_timeout = defined('WP_MEMCACHED_RECV_TIMEOUT') ? (int) WP_MEMCACHED_RECV_TIMEOUT : 250;
+
+		$connect_timeout = $connect_timeout > 0 ? $connect_timeout : 250;
+		$send_timeout = $send_timeout > 0 ? $send_timeout : 250;
+		$recv_timeout = $recv_timeout > 0 ? $recv_timeout : 250;
+
+		$memcached->setOption(Memcached::OPT_NO_BLOCK, false);
+		$memcached->setOption(Memcached::OPT_NOREPLY, false);
+		$memcached->setOption(Memcached::OPT_CONNECT_TIMEOUT, $connect_timeout);
+		$memcached->setOption(Memcached::OPT_SEND_TIMEOUT, $send_timeout * 1000);
+		$memcached->setOption(Memcached::OPT_RECV_TIMEOUT, $recv_timeout * 1000);
 
 		global $memcached_servers;
 

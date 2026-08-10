@@ -249,35 +249,69 @@ class WP_Object_Cache {
 			$this->key_salt = substr($this->key_salt, 0, 20);
 		}
 
-		$this->memcached = new Memcached('wp_object_cache_pool');
+		global $memcached_servers;
+
+		if (empty($memcached_servers) or !is_array($memcached_servers)) {
+			$servers = [
+				['127.0.0.1', 11211],
+			];
+		} else {
+			$servers = $memcached_servers;
+		}
+
+		if (defined('WP_MEMCACHED_CONNECT_TIMEOUT') and WP_MEMCACHED_CONNECT_TIMEOUT > 0) {
+			$connect_timeout = (int) WP_MEMCACHED_CONNECT_TIMEOUT;
+		} else {
+			$connect_timeout = 250;
+		}
+
+		if (defined('WP_MEMCACHED_SEND_TIMEOUT') and WP_MEMCACHED_SEND_TIMEOUT >= 0) {
+			$send_timeout = (int) WP_MEMCACHED_SEND_TIMEOUT;
+		} else {
+			$send_timeout = 250;
+		}
+
+		if (defined('WP_MEMCACHED_RECV_TIMEOUT') and WP_MEMCACHED_RECV_TIMEOUT >= 0) {
+			$recv_timeout = (int) WP_MEMCACHED_RECV_TIMEOUT;
+		} else {
+			$recv_timeout = 250;
+		}
+
+		if (defined('WP_MEMCACHED_IGBINARY') and WP_MEMCACHED_IGBINARY and defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
+			$this->serializer = 'igbinary_serialize';
+			$this->unserializer = 'igbinary_unserialize';
+			$serializer = Memcached::SERIALIZER_IGBINARY;
+		} else {
+			$serializer = Memcached::SERIALIZER_PHP;
+		}
+
+		$pool_signature = hash('sha256', serialize($servers) . ':' . $serializer . ':' . $connect_timeout . ':' . $send_timeout . ':' . $recv_timeout);
+
+		$this->memcached = new Memcached('wp_object_cache_pool_' . substr($pool_signature, 0, 16));
 
 		if (empty($this->memcached->getServerList())) {
 			$this->memcached->setOption(Memcached::OPT_NO_BLOCK, false);
 			$this->memcached->setOption(Memcached::OPT_NOREPLY, false);
 			$this->memcached->setOption(Memcached::OPT_BUFFER_WRITES, false);
 			$this->memcached->setOption(Memcached::OPT_BINARY_PROTOCOL, true);
-			$this->memcached->setOption(Memcached::OPT_CONNECT_TIMEOUT, 100);
-			$this->memcached->setOption(Memcached::OPT_SEND_TIMEOUT, 100000);
-			$this->memcached->setOption(Memcached::OPT_RECV_TIMEOUT, 100000);
+			$this->memcached->setOption(Memcached::OPT_CONNECT_TIMEOUT, $connect_timeout);
+			$this->memcached->setOption(Memcached::OPT_SEND_TIMEOUT, $send_timeout * 1000);
+			$this->memcached->setOption(Memcached::OPT_RECV_TIMEOUT, $recv_timeout * 1000);
+
+			if (defined('Memcached::OPT_DEAD_TIMEOUT')) {
+				$this->memcached->setOption(Memcached::OPT_DEAD_TIMEOUT, 1);
+			}
 
 			$this->memcached->setOption(Memcached::OPT_COMPRESSION, true);
 			$this->memcached->setOption(Memcached::OPT_COMPRESSION_TYPE, Memcached::COMPRESSION_FASTLZ);
 
-			if (defined('WP_MEMCACHED_IGBINARY') and WP_MEMCACHED_IGBINARY and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
+			if ($serializer === Memcached::SERIALIZER_IGBINARY) {
 				$this->memcached->setOption(Memcached::OPT_SERIALIZER, Memcached::SERIALIZER_IGBINARY);
-				$this->serializer = 'igbinary_serialize';
-				$this->unserializer = 'igbinary_unserialize';
 			} else {
 				$this->memcached->setOption(Memcached::OPT_SERIALIZER, Memcached::SERIALIZER_PHP);
 			}
 
-			global $memcached_servers;
-
-			if (!empty($memcached_servers)) {
-				$this->memcached->addServers($memcached_servers);
-			} else {
-				$this->memcached->addServer('127.0.0.1', 11211);
-			}
+			$this->memcached->addServers($servers);
 		}
 
 		$stats = $this->memcached->getStats();
@@ -406,6 +440,11 @@ class WP_Object_Cache {
 
 		// Bulk fetch missing keys from Memcached
 		$cached_values = $this->memcached->getMulti($cache_keys);
+		$code = $this->memcached->getResultCode();
+
+		if ($code !== Memcached::RES_SUCCESS and $code !== Memcached::RES_NOTFOUND) {
+			$this->handle_error($this->memcached->getResultMessage());
+		}
 
 		if (is_array($cached_values)) {
 			foreach ($cache_keys as $cache_key) {
@@ -671,12 +710,13 @@ class WP_Object_Cache {
 		$delete_keys = array_values($memcached_keys);
 
 		$raw_values = $this->memcached->getMulti($delete_keys);
+		$code = $this->memcached->getResultCode();
+
+		if ($code !== Memcached::RES_SUCCESS and $code !== Memcached::RES_NOTFOUND) {
+			$this->handle_error($this->memcached->getResultMessage());
+		}
 
 		if (!is_array($raw_values)) {
-			if ($this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
-				$this->handle_error($this->memcached->getResultMessage());
-			}
-
 			$raw_values = [];
 		}
 
@@ -951,6 +991,11 @@ class WP_Object_Cache {
 		}
 
 		$chunks = $this->memcached->getMulti($cache_keys);
+		$code = $this->memcached->getResultCode();
+
+		if ($code !== Memcached::RES_SUCCESS and $code !== Memcached::RES_NOTFOUND) {
+			$this->handle_error($this->memcached->getResultMessage());
+		}
 
 		if (is_array($chunks) and count($chunks) === count($cache_keys)) {
 			$assembled = '';
@@ -984,9 +1029,21 @@ class WP_Object_Cache {
 			$multi_set[$this->build_key($chunk_key, $group)] = $chunk;
 		}
 
-		$this->memcached->setMulti($multi_set, $expire);
+		$chunks_stored = $this->memcached->setMulti($multi_set, $expire);
 
-		return $this->memcached->set($this->build_key($key, $group), ['__chunk_list' => $chunk_keys], $expire);
+		if (!$chunks_stored) {
+			$this->handle_error($this->memcached->getResultMessage());
+
+			return false;
+		}
+
+		$list_stored = $this->memcached->set($this->build_key($key, $group), ['__chunk_list' => $chunk_keys], $expire);
+
+		if (!$list_stored) {
+			$this->handle_error($this->memcached->getResultMessage());
+		}
+
+		return $list_stored;
 	}
 
 	/**
