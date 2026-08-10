@@ -515,39 +515,9 @@ class WP_Object_Cache {
 	{
 		$values = [];
 
-		if (empty($data)) {
-			return $values;
-		}
-
+		// Use set() per key; setMulti() may silently skip oversized values.
 		foreach ($data as $key => $value) {
-			$this->cache[$group][$key] = $value;
-			$this->cache_sets++;
-			$values[$key] = true;
-		}
-
-		while (count($this->cache[$group]) > $this->runtime_cache_limit) {
-			reset($this->cache[$group]);
-			unset($this->cache[$group][key($this->cache[$group])]);
-		}
-
-		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
-			return $values;
-		}
-
-		$cache_values = [];
-
-		foreach ($data as $key => $value) {
-			$cache_key = $this->build_key($key, $group);
-			$cache_values[$cache_key] = $value;
-		}
-
-		$stored = $this->memcached->setMulti($cache_values, $expire);
-
-		if (!$stored or $this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
-			foreach ($data as $key => $value) {
-				$this->cache_sets--;
-				$values[$key] = $this->set($key, $value, $group, $expire);
-			}
+			$values[$key] = $this->set($key, $value, $group, $expire);
 		}
 
 		return $values;
