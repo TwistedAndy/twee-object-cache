@@ -703,6 +703,58 @@ class CacheTest extends TestCase {
 		$this->assertSame($large, wp_cache_get('large', 'large_group'));
 	}
 
+	public function test_oversized_string_round_trip(): void
+	{
+		$large = base64_encode(random_bytes(8 * 1024 * 1024));
+
+		$this->assertTrue(wp_cache_set('large_string', $large, 'large_group'));
+		wp_cache_flush_runtime();
+
+		$this->assertSame($large, wp_cache_get('large_string', 'large_group'));
+	}
+
+	public function test_oversized_add_round_trip(): void
+	{
+		$large = base64_encode(random_bytes(8 * 1024 * 1024));
+
+		$this->assertTrue(wp_cache_add('large_add', $large, 'large_add_group'));
+		wp_cache_flush_runtime();
+
+		$this->assertSame($large, wp_cache_get('large_add', 'large_add_group'));
+	}
+
+	public function test_oversized_set_multiple_round_trip(): void
+	{
+		$large = base64_encode(random_bytes(8 * 1024 * 1024));
+
+		$results = wp_cache_set_multiple(
+			['bulk_large' => $large, 'bulk_small' => 'small'],
+			'bulk_chunk_group'
+		);
+
+		$this->assertTrue($results['bulk_large']);
+		$this->assertTrue($results['bulk_small']);
+
+		wp_cache_flush_runtime();
+
+		$values = wp_cache_get_multiple(['bulk_large', 'bulk_small'], 'bulk_chunk_group');
+		$this->assertSame($large, $values['bulk_large']);
+		$this->assertSame('small', $values['bulk_small']);
+	}
+
+	public function test_oversized_replace_round_trip(): void
+	{
+		$large = base64_encode(random_bytes(8 * 1024 * 1024));
+
+		wp_cache_set('large_replace', 'seed', 'large_replace_group');
+		wp_cache_flush_runtime();
+
+		$this->assertTrue(wp_cache_replace('large_replace', $large, 'large_replace_group'));
+		wp_cache_flush_runtime();
+
+		$this->assertSame($large, wp_cache_get('large_replace', 'large_replace_group'));
+	}
+
 	public function test_wp_cache_reset_clears_cache(): void
 	{
 		wp_cache_set('reset_a', 'a', 'reset_group');
@@ -1222,8 +1274,10 @@ class CacheTest extends TestCase {
 
 		wp_cache_set('flush_long_a', 'A', $group);
 		wp_cache_set('flush_long_b', 'B', $group);
+		wp_cache_flush_runtime();
 
 		wp_cache_flush_group($group);
+		wp_cache_flush_runtime();
 
 		$this->assertFalse(wp_cache_get('flush_long_a', $group));
 		$this->assertFalse(wp_cache_get('flush_long_b', $group));

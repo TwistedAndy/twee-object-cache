@@ -514,17 +514,15 @@ class WP_Object_Cache {
 	public function set_multiple(array $data, string $group = 'default', int $expire = 0): array
 	{
 		$values = [];
-		$cache_values = [];
+
+		if (empty($data)) {
+			return $values;
+		}
 
 		foreach ($data as $key => $value) {
 			$this->cache[$group][$key] = $value;
 			$this->cache_sets++;
 			$values[$key] = true;
-
-			// Prepare data for bulk Memcached storage if persistent
-			if (!isset($this->non_persistent_groups[$group]) and $this->active) {
-				$cache_values[$this->build_key($key, $group)] = $value;
-			}
 		}
 
 		while (count($this->cache[$group]) > $this->runtime_cache_limit) {
@@ -532,11 +530,23 @@ class WP_Object_Cache {
 			unset($this->cache[$group][key($this->cache[$group])]);
 		}
 
-		if (!empty($cache_values)) {
-			$this->memcached->setMulti($cache_values, (int) $expire);
+		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
+			return $values;
+		}
 
-			if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
-				$this->handle_error($this->memcached->getResultMessage());
+		$cache_values = [];
+
+		foreach ($data as $key => $value) {
+			$cache_key = $this->build_key($key, $group);
+			$cache_values[$cache_key] = $value;
+		}
+
+		$stored = $this->memcached->setMulti($cache_values, $expire);
+
+		if (!$stored or $this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
+			foreach ($data as $key => $value) {
+				$this->cache_sets--;
+				$values[$key] = $this->set($key, $value, $group, $expire);
 			}
 		}
 
@@ -564,27 +574,16 @@ class WP_Object_Cache {
 			return true;
 		}
 
-		$memcached_key = $this->build_key($key, $group);
+		$added = $this->memcached->add($this->build_key($key, $group), $data, (int) $expire);
 
-		// Memcached::add() with OPT_NO_BLOCK may not reliably return false
-		// when the key already exists, so verify backend presence first.
-		$existing = $this->memcached->get($memcached_key);
-		$code = $this->memcached->getResultCode();
+		if (!$added) {
+			$code = $this->memcached->getResultCode();
 
-		if ($code === Memcached::RES_SUCCESS) {
-			return false;
-		}
-
-		if ($code !== Memcached::RES_NOTFOUND) {
-			$this->handle_error($this->memcached->getResultMessage());
-
-			return false;
-		}
-
-		$added = $this->memcached->set($memcached_key, $data, (int) $expire);
-
-		if (!$added and $this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
-			$this->handle_error($this->memcached->getResultMessage());
+			if ($code === Memcached::RES_E2BIG) {
+				$added = $this->set_chunked_value($key, $data, $group, $expire, 'add');
+			} elseif ($code !== Memcached::RES_NOTSTORED and $code !== Memcached::RES_DATA_EXISTS) {
+				$this->handle_error($this->memcached->getResultMessage());
+			}
 		}
 
 		if ($added) {
@@ -620,7 +619,11 @@ class WP_Object_Cache {
 			$replaced = $this->memcached->replace($this->build_key($key, $group), $data, (int) $expire);
 
 			if (!$replaced and $this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
-				$this->handle_error($this->memcached->getResultMessage());
+				if ($this->memcached->getResultCode() === Memcached::RES_E2BIG) {
+					$replaced = $this->set_chunked_value($key, $data, $group, $expire, 'replace');
+				} else {
+					$this->handle_error($this->memcached->getResultMessage());
+				}
 			}
 
 			if ($replaced) {
@@ -879,8 +882,8 @@ class WP_Object_Cache {
 
 		$namespaced_group = $prefix . $group;
 
-		if (strlen($namespaced_group) > 100) {
-			$namespaced_group = substr($namespaced_group, 0, 100);
+		if (strlen($namespaced_group) > 70) {
+			$namespaced_group = substr($namespaced_group, 0, 70) . substr(hash('sha256', $group), 0, 10);
 		}
 
 		$version_key = $this->key_salt . ':group:' . $namespaced_group;
@@ -976,9 +979,9 @@ class WP_Object_Cache {
 	}
 
 	/**
-	 * Resolves an array chunked payload back into a single array
+	 * Resolves a chunked payload back into its original value
 	 */
-	private function get_chunked_value(array $value, string $group): bool|array
+	private function get_chunked_value(array $value, string $group): mixed
 	{
 		if (empty($value['__chunk_list']) or !is_array($value['__chunk_list'])) {
 			return false;
@@ -1001,6 +1004,10 @@ class WP_Object_Cache {
 			$assembled = '';
 
 			foreach ($cache_keys as $cache_key) {
+				if (!array_key_exists($cache_key, $chunks) or !is_string($chunks[$cache_key])) {
+					return false;
+				}
+
 				$assembled .= $chunks[$cache_key];
 			}
 
@@ -1015,16 +1022,29 @@ class WP_Object_Cache {
 	/**
 	 * Splits a massive payload into chunks and stores them in Memcached
 	 */
-	private function set_chunked_value(int|string $key, mixed $data, string $group, int $expire): bool
+	private function set_chunked_value(int|string $key, mixed $data, string $group, int $expire, string $operation = 'set'): bool
 	{
+		$cache_key = $this->build_key($key, $group);
+		$previous = $this->memcached->get($cache_key);
+		$previous_chunk_keys = [];
+
+		if (is_array($previous) and !empty($previous['__chunk_list']) and is_array($previous['__chunk_list'])) {
+			foreach ($previous['__chunk_list'] as $chunk_key) {
+				$previous_chunk_keys[] = $this->build_key((string) $chunk_key, $group);
+			}
+		}
+
 		$serializer = $this->serializer;
 		$serialized = $serializer($data);
+
 		$chunks = str_split($serialized, 500000);
 		$chunk_keys = [];
+
 		$multi_set = [];
+		$generation = bin2hex(random_bytes(8));
 
 		foreach ($chunks as $index => $chunk) {
-			$chunk_key = $key . '_chunk_' . $index;
+			$chunk_key = $key . '_chunk_' . $generation . '_' . $index;
 			$chunk_keys[] = $chunk_key;
 			$multi_set[$this->build_key($chunk_key, $group)] = $chunk;
 		}
@@ -1032,18 +1052,38 @@ class WP_Object_Cache {
 		$chunks_stored = $this->memcached->setMulti($multi_set, $expire);
 
 		if (!$chunks_stored) {
-			$this->handle_error($this->memcached->getResultMessage());
+			$message = $this->memcached->getResultMessage();
+			$this->memcached->deleteMulti(array_keys($multi_set));
+			$this->handle_error($message);
 
 			return false;
 		}
 
-		$list_stored = $this->memcached->set($this->build_key($key, $group), ['__chunk_list' => $chunk_keys], $expire);
-
-		if (!$list_stored) {
-			$this->handle_error($this->memcached->getResultMessage());
+		if ($operation === 'add') {
+			$list_stored = $this->memcached->add($cache_key, ['__chunk_list' => $chunk_keys], $expire);
+		} elseif ($operation === 'replace') {
+			$list_stored = $this->memcached->replace($cache_key, ['__chunk_list' => $chunk_keys], $expire);
+		} else {
+			$list_stored = $this->memcached->set($cache_key, ['__chunk_list' => $chunk_keys], $expire);
 		}
 
-		return $list_stored;
+		if (!$list_stored) {
+			$message = $this->memcached->getResultMessage();
+			$code = $this->memcached->getResultCode();
+			$this->memcached->deleteMulti(array_keys($multi_set));
+
+			if (($operation === 'add' and $code !== Memcached::RES_NOTSTORED and $code !== Memcached::RES_DATA_EXISTS) or ($operation === 'replace' and $code !== Memcached::RES_NOTFOUND) or ($operation === 'set')) {
+				$this->handle_error($message);
+			}
+
+			return false;
+		}
+
+		if (!empty($previous_chunk_keys)) {
+			$this->memcached->deleteMulti($previous_chunk_keys);
+		}
+
+		return true;
 	}
 
 	/**
