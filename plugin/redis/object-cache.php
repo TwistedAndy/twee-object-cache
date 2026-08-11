@@ -915,6 +915,12 @@ class WP_Object_Cache {
 	{
 		$this->active = false;
 
+		$flag_file = __DIR__ . '/.ocflush';
+
+		if (!file_exists($flag_file)) {
+			@touch($flag_file);
+		}
+
 		trigger_error('Twee Redis Object Cache: ' . $e->getMessage(), E_USER_NOTICE);
 	}
 
