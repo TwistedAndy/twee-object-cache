@@ -355,6 +355,10 @@ class WP_Object_Cache {
 
 	public function get(int|string $key, string $group = 'default', bool|null $force = false, &$found = null): mixed
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		// Check runtime cache first
 		if (!$force and isset($this->cache[$group]) and array_key_exists($key, $this->cache[$group])) {
 			$found = true;
@@ -412,6 +416,10 @@ class WP_Object_Cache {
 
 	public function get_multiple(array $keys, string $group = 'default', bool $force = false): array
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		$values = [];
 		$cache_keys = [];
 		$key_map = [];
@@ -484,6 +492,10 @@ class WP_Object_Cache {
 
 	public function set(int|string $key, mixed $data, string $group = 'default', int $expire = 0): bool
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		// Always store in runtime cache
 		$this->cache[$group][$key] = $data;
 		$this->cache_sets++;
@@ -513,6 +525,10 @@ class WP_Object_Cache {
 
 	public function set_multiple(array $data, string $group = 'default', int $expire = 0): array
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		$values = [];
 
 		// Use set() per key; setMulti() may silently skip oversized values.
@@ -527,6 +543,10 @@ class WP_Object_Cache {
 	{
 		if (wp_suspend_cache_addition()) {
 			return false;
+		}
+
+		if ($group === '') {
+			$group = 'default';
 		}
 
 		if (!isset($this->cache[$group])) {
@@ -577,6 +597,10 @@ class WP_Object_Cache {
 
 	public function replace(int|string $key, mixed $data, string $group = 'default', int $expire = 0): bool
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		if (!isset($this->cache[$group])) {
 			$this->cache[$group] = [];
 		}
@@ -609,6 +633,10 @@ class WP_Object_Cache {
 
 	public function delete(int|string $key, string $group = 'default'): bool
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		$deleted_runtime = false;
 
 		if (isset($this->cache[$group]) and array_key_exists($key, $this->cache[$group])) {
@@ -654,6 +682,10 @@ class WP_Object_Cache {
 
 	public function delete_multiple(array $keys, string $group = 'default'): array
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		if (empty($keys)) {
 			return [];
 		}
@@ -720,6 +752,10 @@ class WP_Object_Cache {
 
 	public function incr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
@@ -752,6 +788,10 @@ class WP_Object_Cache {
 
 	public function decr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
 			$value = $this->get($key, $group);
 
@@ -818,6 +858,10 @@ class WP_Object_Cache {
 
 	public function flush_group(string $group): bool
 	{
+		if ($group === '') {
+			$group = 'default';
+		}
+
 		// Harvest old keys from runtime cache to perform a partial ghost-key cleanup
 		if ($this->active and !isset($this->non_persistent_groups[$group])) {
 			$keys_to_delete = [];

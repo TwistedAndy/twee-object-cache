@@ -107,6 +107,83 @@ class CacheTest extends TestCase {
 		$this->assertSame('value_default', wp_cache_get('key_default', 'default'));
 	}
 
+	public function test_empty_group_is_defaulted_to_default(): void
+	{
+		wp_cache_set('key_empty_group', 'value_empty_group', '');
+		wp_cache_flush_runtime();
+
+		$this->assertSame('value_empty_group', wp_cache_get('key_empty_group', 'default'));
+		$this->assertSame('value_empty_group', wp_cache_get('key_empty_group', ''));
+	}
+
+	public function test_empty_group_is_defaulted_for_multiple_operations(): void
+	{
+		$set = wp_cache_set_multiple([
+			'empty_group_set_a' => 'set_a',
+			'empty_group_set_b' => 'set_b',
+		], '');
+
+		$this->assertTrue($set['empty_group_set_a']);
+		$this->assertTrue($set['empty_group_set_b']);
+
+		wp_cache_flush_runtime();
+
+		$values = wp_cache_get_multiple(['empty_group_set_a', 'empty_group_set_b'], 'default');
+		$this->assertSame('set_a', $values['empty_group_set_a']);
+		$this->assertSame('set_b', $values['empty_group_set_b']);
+
+		$values = wp_cache_get_multiple(['empty_group_set_a', 'empty_group_set_b'], '');
+		$this->assertSame('set_a', $values['empty_group_set_a']);
+		$this->assertSame('set_b', $values['empty_group_set_b']);
+
+		$added = wp_cache_add_multiple([
+			'empty_group_add_a' => 'add_a',
+			'empty_group_add_b' => 'add_b',
+		], '');
+
+		$this->assertTrue($added['empty_group_add_a']);
+		$this->assertTrue($added['empty_group_add_b']);
+		$this->assertSame('add_a', wp_cache_get('empty_group_add_a', 'default'));
+		$this->assertSame('add_b', wp_cache_get('empty_group_add_b', 'default'));
+
+		$deleted = wp_cache_delete_multiple(['empty_group_set_a', 'empty_group_set_b'], '');
+		$this->assertTrue($deleted['empty_group_set_a']);
+		$this->assertTrue($deleted['empty_group_set_b']);
+		$this->assertFalse(wp_cache_get('empty_group_set_a', 'default'));
+		$this->assertFalse(wp_cache_get('empty_group_set_b', 'default'));
+	}
+
+	public function test_empty_group_is_defaulted_for_add_replace_and_delete(): void
+	{
+		$this->assertTrue(wp_cache_add('empty_group_add', 'added', ''));
+		$this->assertSame('added', wp_cache_get('empty_group_add', 'default'));
+
+		wp_cache_flush_runtime();
+
+		$this->assertTrue(wp_cache_replace('empty_group_add', 'replaced', ''));
+		$this->assertSame('replaced', wp_cache_get('empty_group_add', 'default'));
+		$this->assertTrue(wp_cache_delete('empty_group_add', ''));
+		$this->assertFalse(wp_cache_get('empty_group_add', 'default'));
+	}
+
+	public function test_empty_group_is_defaulted_for_counters(): void
+	{
+		wp_cache_set('empty_group_counter', 10, 'default');
+		wp_cache_flush_runtime();
+
+		$this->assertSame(12, wp_cache_incr('empty_group_counter', 2, ''));
+		$this->assertSame(9, wp_cache_decr('empty_group_counter', 3, ''));
+		$this->assertSame(9, wp_cache_get('empty_group_counter', 'default'));
+	}
+
+	public function test_empty_group_is_defaulted_for_group_flush(): void
+	{
+		wp_cache_set('empty_group_flush', 'value', 'default');
+
+		$this->assertTrue(wp_cache_flush_group(''));
+		$this->assertFalse(wp_cache_get('empty_group_flush', 'default'));
+	}
+
 	public function test_get_returns_false_and_sets_found_on_miss(): void
 	{
 		$found = 'sentinel';
