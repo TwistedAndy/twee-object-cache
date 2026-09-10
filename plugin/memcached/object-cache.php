@@ -892,7 +892,10 @@ class WP_Object_Cache
 		if (!empty($keys_to_delete)) {
 			$this->memcached->deleteMulti($keys_to_delete);
 
-			if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
+			$code = $this->memcached->getResultCode();
+
+			// A harvested key may have already expired or been evicted, so ignore NOT FOUND
+			if ($code !== Memcached::RES_SUCCESS and $code !== Memcached::RES_NOTFOUND) {
 				$this->handle_error($this->memcached->getResultMessage());
 			}
 		}
