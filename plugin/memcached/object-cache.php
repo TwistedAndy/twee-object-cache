@@ -316,9 +316,9 @@ class WP_Object_Cache
 
 		$stats = $this->memcached->getStats();
 
-		if (!empty($stats)) {
+		if (is_array($stats)) {
 			foreach ($stats as $data) {
-				if (is_array($data) and isset($data['pid']) and $data['pid'] > 0) {
+				if (is_array($data) and !empty($data['pid'])) {
 					$this->active = true;
 					break;
 				}
@@ -979,17 +979,28 @@ class WP_Object_Cache
 	}
 
 	/**
-	 * Deactivate the cache for the rest of a request and trigger
-	 * a failure via trigger_error() with WP_DEBUG support
+	 * Deactivate the cache and flag a full flush only on a real outage
 	 */
 	private function handle_error(string $message): void
 	{
-		$this->active = false;
+		$active = false;
+		$stats = $this->memcached->getStats();
 
-		$flag_file = __DIR__ . '/.ocflush';
+		if (is_array($stats)) {
+			foreach ($stats as $data) {
+				if (is_array($data) and !empty($data['pid'])) {
+					$active = true;
+					break;
+				}
+			}
+		}
 
-		if (!file_exists($flag_file)) {
-			@touch($flag_file);
+		if (!$active) {
+			$this->active = false;
+
+			if (!file_exists(__DIR__ . '/.ocflush')) {
+				@touch(__DIR__ . '/.ocflush');
+			}
 		}
 
 		trigger_error('Twee Memcached Object Cache: ' . $message, E_USER_WARNING);

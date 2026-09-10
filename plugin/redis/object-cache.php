@@ -948,17 +948,22 @@ class WP_Object_Cache {
 	}
 
 	/**
-	 * Deactivate the cache for the rest of a request and trigger
-	 * a failure via trigger_error() with WP_DEBUG support
+	 * Deactivate the cache and flag a full flush only on a real outage
 	 */
 	private function handle_error(Exception $e): void
 	{
-		$this->active = false;
+		try {
+			$active = (bool) $this->redis->ping();
+		} catch (Exception $ignored) {
+			$active = false;
+		}
 
-		$flag_file = __DIR__ . '/.ocflush';
+		if (!$active) {
+			$this->active = false;
 
-		if (!file_exists($flag_file)) {
-			@touch($flag_file);
+			if (!file_exists(__DIR__ . '/.ocflush')) {
+				@touch(__DIR__ . '/.ocflush');
+			}
 		}
 
 		trigger_error('Twee Redis Object Cache: ' . $e->getMessage(), E_USER_NOTICE);
