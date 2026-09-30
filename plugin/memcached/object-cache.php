@@ -979,12 +979,12 @@ class WP_Object_Cache
 	}
 
 	/**
-	 * Deactivate the cache and flag a full flush only on a real outage
+	 * Deactivate the cache and flag a full flush on a real outage or when forced
 	 */
-	private function handle_error(string $message): void
+	private function handle_error(string $message, bool $disable = false): void
 	{
 		$active = false;
-		$stats = $this->memcached->getStats();
+		$stats = $disable ? false : $this->memcached->getStats();
 
 		if (is_array($stats)) {
 			foreach ($stats as $data) {
@@ -1151,19 +1151,22 @@ class WP_Object_Cache
 
 		$version_key = $this->key_salt . ':group:' . $namespaced_group;
 		$version_number = $this->memcached->get($version_key);
-		$code = $this->memcached->getResultCode();
 
-		if ($code !== Memcached::RES_SUCCESS) {
-			if ($code !== Memcached::RES_NOTFOUND) {
-				$this->handle_error($this->memcached->getResultMessage());
-			}
-
+		if ($this->memcached->getResultCode() === Memcached::RES_NOTFOUND) {
+			// Use add() so concurrent requests agree on a single version
 			$version_number = bin2hex(random_bytes(8));
-			$this->memcached->set($version_key, $version_number);
 
-			if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
-				$this->handle_error($this->memcached->getResultMessage());
+			// Re-read only when another request won the race to keep the original error otherwise
+			if (!$this->memcached->add($version_key, $version_number) and in_array($this->memcached->getResultCode(), [Memcached::RES_NOTSTORED, Memcached::RES_DATA_EXISTS], true)) {
+				$version_number = $this->memcached->get($version_key);
 			}
+		}
+
+		if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS or !is_string($version_number)) {
+			// Without the shared version, writes and deletes would miss the real namespace
+			$this->handle_error($this->memcached->getResultMessage(), true);
+
+			return $this->key_salt . ':' . $namespaced_group . ':' . bin2hex(random_bytes(8));
 		}
 
 		$cache_group = $this->key_salt . ':' . $namespaced_group . ':' . $version_number;
