@@ -16,6 +16,12 @@
 		"test": "@php vendor/phpunit/phpunit/phpunit --no-coverage",
 		"test:redis": "set TW_CACHE_ENGINE=redis && composer test",
 		"test:memcached": "set TW_CACHE_ENGINE=memcached && composer test",
-		"test:apcu": "set TW_CACHE_ENGINE=apcu && composer test"
+		"test:apcu": "set TW_CACHE_ENGINE=apcu && composer test",
+		"zip": "@php bin/release.php zip",
+		"release": "@php bin/release.php publish"
+	},
+	"scripts-descriptions": {
+		"zip": "Builds build/twee-object-cache-{version}.zip from the plugin directory at HEAD.",
+		"release": "Publishes the ZIP as GitHub release v{version} with its section of CHANGELOG.md as the notes."
 	}
 }

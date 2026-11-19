@@ -6,92 +6,99 @@
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  * Version: 1.0.0
+ * Requires PHP: 8.0
+ * License: MIT
+ * Update URI: https://github.com/TwistedAndy/twee-object-cache
  */
 
 if (!defined('ABSPATH')) {
 	exit;
 }
 
-add_action('admin_bar_menu', 'twee_object_cache_admin_bar', 100);
+add_action('init', 'twee_cache_action');
+add_action('admin_bar_menu', 'twee_cache_admin_bar', 100);
+add_action('upgrader_process_complete', 'twee_cache_upgraded', 10, 2);
+add_filter('update_plugins_github.com', 'twee_cache_update_check', 10, 3);
+add_filter('plugins_api', 'twee_cache_update_details', 10, 3);
 
 /**
- * Clear object cache on activation
- */
-register_activation_hook(__FILE__, function(): void {
-	wp_cache_flush();
-});
-
-/**
- * Clear object cache on deactivation
+ * Remove the drop-in on deactivation. A drop-in of another plugin stays.
  */
 register_deactivation_hook(__FILE__, function(): void {
-	wp_cache_flush();
-
-	$dropin_file = WP_CONTENT_DIR . '/object-cache.php';
-
-	if (file_exists($dropin_file)) {
-		unlink($dropin_file);
+	if (twee_cache_engine() !== '') {
+		wp_cache_flush();
+		@unlink(WP_CONTENT_DIR . '/object-cache.php');
 	}
 });
 
-/**
- * Add a notice when it's not possible to activate the cache engine
- */
-if (isset($_GET['twee_cache_error']) and $_GET['twee_cache_error'] === 'unreachable') {
-	add_action('admin_notices', function() {
-		$message = 'The selected cache engine is not reachable. Please check your configuration.';
-
-		if (function_exists('wp_admin_notice')) {
-			wp_admin_notice($message, ['type' => 'error', 'dismissible' => true,]);
-		} else {
-			echo '<div class="notice notice-error"><p>' . $message . '</p></div>';
-		}
-	});
-}
 
 /**
- * Add the Object Cache menu in the WordPress Admin Bar
+ * Do the action of an Object Cache menu link (enable, disable, flush)
+ *
+ * The action runs before the page output starts, so the redirect can send its headers.
  */
-function twee_object_cache_admin_bar($admin_bar): void
+function twee_cache_action(): void
 {
-	if (!current_user_can('manage_options')) {
+	$action = $_GET['twee_cache_action'] ?? '';
+
+	if (!$action or !current_user_can(is_multisite() ? 'manage_network_options' : 'manage_options')) {
 		return;
 	}
 
-	// Handle actions (enable, disable, flush)
-	$action = $_GET['twee_cache_action'] ?? '';
+	check_admin_referer('twee_cache_action');
 
-	if ($action and wp_verify_nonce($_GET['_wpnonce'] ?? '', 'twee_cache_action')) {
-		$dropin_file = WP_CONTENT_DIR . '/object-cache.php';
-		$redirect_url = remove_query_arg(['twee_cache_action', '_wpnonce', 'twee_cache_error']);
+	$dropin_file = WP_CONTENT_DIR . '/object-cache.php';
+	$redirect_url = remove_query_arg(['twee_cache_action', '_wpnonce']);
 
-		if ($action === 'flush') {
-			wp_cache_flush();
-		} elseif ($action === 'disable' and file_exists($dropin_file)) {
-			unlink($dropin_file);
-		} elseif (strpos($action, 'enable_') === 0) {
-			$engine = str_replace('enable_', '', $action);
+	if ($action === 'flush') {
+		wp_cache_flush();
+	} elseif ($action === 'disable') {
+		if (twee_cache_engine() !== '' and !@unlink($dropin_file)) {
+			wp_die('Cannot delete ' . esc_html($dropin_file) . '. Make sure that the web server can write to this file.', 'Object Cache', ['back_link' => true]);
+		}
+	} elseif (str_starts_with($action, 'enable_')) {
+		$engine = substr($action, 7);
 
-			if (twee_object_cache_is_reachable($engine)) {
-				$source_file = plugin_dir_path(__FILE__) . $engine . '/object-cache.php';
-
-				if (file_exists($source_file)) {
-					copy($source_file, $dropin_file);
-					wp_cache_flush();
-
-					$redirect_url = add_query_arg([
-						'twee_cache_action' => 'flush',
-						'_wpnonce'          => wp_create_nonce('twee_cache_action')
-					], $redirect_url);
-				}
-			} else {
-				$redirect_url = add_query_arg('twee_cache_error', 'unreachable', $redirect_url);
-			}
+		if (file_exists($dropin_file)) {
+			wp_die('An object cache is already installed. Disable it first.', 'Object Cache', ['back_link' => true]);
 		}
 
-		wp_redirect($redirect_url);
-		exit;
+		if (!twee_cache_is_reachable($engine)) {
+			wp_die('The selected cache engine is not reachable. Check the configuration.', 'Object Cache', ['back_link' => true]);
+		}
+
+		if (!twee_cache_install($engine)) {
+			wp_die('Cannot write ' . esc_html($dropin_file) . '. Make sure that the web server can write to the wp-content folder.', 'Object Cache', ['back_link' => true]);
+		}
+
+		// The drop-in loads on the next request, so that request removes the values that were saved before
+		$redirect_url = add_query_arg([
+			'twee_cache_action' => 'flush',
+			'_wpnonce'          => wp_create_nonce('twee_cache_action')
+		], $redirect_url);
 	}
+
+	wp_safe_redirect($redirect_url);
+	exit;
+}
+
+
+/**
+ * Add the Object Cache menu in the WordPress Admin Bar
+ *
+ * @param WP_Admin_Bar $admin_bar
+ */
+function twee_cache_admin_bar(WP_Admin_Bar $admin_bar): void
+{
+	if (!current_user_can(is_multisite() ? 'manage_network_options' : 'manage_options')) {
+		return;
+	}
+
+	$engines = [
+		'memcached' => 'Memcached',
+		'redis'     => 'Redis',
+		'apcu'      => 'APCu'
+	];
 
 	$admin_bar->add_node([
 		'id'    => 'twee-object-cache',
@@ -99,89 +106,157 @@ function twee_object_cache_admin_bar($admin_bar): void
 		'href'  => '#',
 	]);
 
-	if (file_exists(WP_CONTENT_DIR . '/object-cache.php')) {
-		global $wp_object_cache;
+	$engine = twee_cache_engine();
 
-		if (is_object($wp_object_cache) and method_exists($wp_object_cache, 'stats')) {
-			ob_start();
-			$wp_object_cache->stats();
-			$stats_html = ob_get_clean();
-		} else {
-			$stats_html = '';
-		}
+	if ($engine !== '') {
+		$admin_bar->add_node([
+			'id'     => 'twee-cache-stats',
+			'parent' => 'twee-object-cache',
+			'title'  => '<strong>Engine:</strong> ' . $engines[$engine],
+		]);
 
-		if ($stats_html) {
-			$stats_html = strip_tags($stats_html, '<strong><br>');
-			$lines = preg_split('/<br\s*\/?>/i', $stats_html, -1, PREG_SPLIT_NO_EMPTY);
-
-			foreach ($lines as $line) {
-				if (strpos($line, 'Engine:') !== false) {
-					$admin_bar->add_node([
-						'id'     => 'twee-cache-stats',
-						'parent' => 'twee-object-cache',
-						'title'  => trim($line),
-					]);
-					break;
-				}
-			}
-		}
-
-		$flush_url = wp_nonce_url(add_query_arg('twee_cache_action', 'flush'), 'twee_cache_action');
 		$admin_bar->add_node([
 			'id'     => 'twee-cache-flush',
 			'parent' => 'twee-object-cache',
 			'title'  => 'Clean Cache',
-			'href'   => $flush_url,
+			'href'   => wp_nonce_url(add_query_arg('twee_cache_action', 'flush'), 'twee_cache_action'),
 		]);
 
-		$disable_url = wp_nonce_url(add_query_arg('twee_cache_action', 'disable'), 'twee_cache_action');
 		$admin_bar->add_node([
 			'id'     => 'twee-cache-disable',
 			'parent' => 'twee-object-cache',
 			'title'  => 'Disable Cache',
-			'href'   => $disable_url,
+			'href'   => wp_nonce_url(add_query_arg('twee_cache_action', 'disable'), 'twee_cache_action'),
 		]);
-	} else {
 
-		// Check available extensions
-		$engines = [
-			'memcached' => 'Memcached',
-			'redis'     => 'Redis',
-			'apcu'      => 'APCu'
-		];
-		$available = [];
+		return;
+	}
 
-		foreach ($engines as $ext => $name) {
-			if (extension_loaded($ext)) {
-				$available[$ext] = $name;
-			}
-		}
+	if (file_exists(WP_CONTENT_DIR . '/object-cache.php')) {
+		$admin_bar->add_node([
+			'id'     => 'twee-cache-other',
+			'parent' => 'twee-object-cache',
+			'title'  => 'Another object cache is installed',
+		]);
 
-		if (empty($available)) {
+		return;
+	}
+
+	$available = false;
+
+	foreach ($engines as $ext => $name) {
+		if (extension_loaded($ext)) {
+			$available = true;
+
 			$admin_bar->add_node([
-				'id'     => 'twee-cache-no-ext',
+				'id'     => 'twee-cache-enable-' . $ext,
 				'parent' => 'twee-object-cache',
-				'title'  => 'No extensions available',
+				'title'  => 'Enable ' . $name,
+				'href'   => wp_nonce_url(add_query_arg('twee_cache_action', 'enable_' . $ext), 'twee_cache_action'),
 			]);
-		} else {
-			foreach ($available as $ext => $name) {
-				$enable_url = wp_nonce_url(add_query_arg('twee_cache_action', 'enable_' . $ext), 'twee_cache_action');
-				$admin_bar->add_node([
-					'id'     => 'twee-cache-enable-' . $ext,
-					'parent' => 'twee-object-cache',
-					'title'  => 'Enable ' . $name,
-					'href'   => $enable_url,
-				]);
-			}
 		}
+	}
+
+	if (!$available) {
+		$admin_bar->add_node([
+			'id'     => 'twee-cache-no-ext',
+			'parent' => 'twee-object-cache',
+			'title'  => 'No extensions available',
+		]);
+	}
+}
+
+
+/**
+ * Get the engine of the installed drop-in
+ *
+ * @return string The engine (redis, memcached or apcu), or an empty string when there is no drop-in or another plugin installed it
+ */
+function twee_cache_engine(): string
+{
+	$dropin_file = WP_CONTENT_DIR . '/object-cache.php';
+
+	if (!is_file($dropin_file)) {
+		return '';
+	}
+
+	return match (get_file_data($dropin_file, ['name' => 'Plugin Name'])['name']) {
+		'Twee Redis Object Cache' => 'redis',
+		'Twee Memcached Object Cache' => 'memcached',
+		'Twee APCu Object Cache' => 'apcu',
+		default => '',
+	};
+}
+
+
+/**
+ * Copy the drop-in of an engine to the wp-content folder
+ *
+ * The file is replaced with a rename, so a request never loads a partly written drop-in.
+ *
+ * @param string $engine redis, memcached or apcu
+ *
+ * @return bool
+ */
+function twee_cache_install(string $engine): bool
+{
+	$source_file = __DIR__ . '/' . $engine . '/object-cache.php';
+	$dropin_file = WP_CONTENT_DIR . '/object-cache.php';
+	$temp_file = $dropin_file . '.' . uniqid() . '.tmp';
+
+	if (!@copy($source_file, $temp_file)) {
+		return false;
+	}
+
+	if (!@rename($temp_file, $dropin_file)) {
+		@unlink($temp_file);
+		return false;
+	}
+
+	// OPcache can keep the old drop-in when it does not examine the file time
+	if (function_exists('opcache_invalidate')) {
+		opcache_invalidate($dropin_file, true);
+	}
+
+	return true;
+}
+
+
+/**
+ * Replace the drop-in with the version of the updated plugin
+ *
+ * @param WP_Upgrader $upgrader
+ * @param array       $options
+ */
+function twee_cache_upgraded($upgrader, array $options): void
+{
+	if (($options['type'] ?? '') !== 'plugin') {
+		return;
+	}
+
+	$engine = twee_cache_engine();
+
+	if ($engine === '') {
+		return;
+	}
+
+	$installed = get_file_data(WP_CONTENT_DIR . '/object-cache.php', ['version' => 'Version'])['version'];
+	$source_file = __DIR__ . '/' . $engine . '/object-cache.php';
+
+	if (is_file($source_file) and $installed !== get_file_data($source_file, ['version' => 'Version'])['version']) {
+		twee_cache_install($engine);
 	}
 }
 
 
 /**
  * Check if the selected cache engine is actually working
+ *
+ * @param string $ext
+ *
+ * @return bool
  */
-function twee_object_cache_is_reachable($ext): bool
+function twee_cache_is_reachable(string $ext): bool
 {
 	if ($ext === 'apcu') {
 		return (function_exists('apcu_enabled') and apcu_enabled());
@@ -221,7 +296,7 @@ function twee_object_cache_is_reachable($ext): bool
 			return false;
 		}
 
-		foreach ($stats as $server => $data) {
+		foreach ($stats as $data) {
 			if (isset($data['pid']) and $data['pid'] > 0) {
 				return true;
 			}
@@ -262,4 +337,108 @@ function twee_object_cache_is_reachable($ext): bool
 	}
 
 	return false;
+}
+
+
+/**
+ * Get the latest release with a plugin ZIP attached, kept for 12 hours
+ *
+ * "Check again" on the Updates screen asks GitHub again.
+ *
+ * @return array The version, package, url and notes, or an empty array when there is no release to install
+ */
+function twee_cache_release(): array
+{
+	$release = empty($_GET['force-check']) ? get_transient('twee_cache_release') : false;
+
+	if (is_array($release)) {
+		return $release;
+	}
+
+	$response = wp_remote_get('https://api.github.com/repos/TwistedAndy/twee-object-cache/releases/latest', [
+		'timeout' => 10,
+		'headers' => ['Accept' => 'application/vnd.github.html+json'],
+	]);
+
+	$data = is_wp_error($response) ? null : json_decode(wp_remote_retrieve_body($response), true);
+
+	// The source archives that GitHub adds hold the whole repository, so only an attached ZIP can be installed
+	$zip = current(array_filter($data['assets'] ?? [], fn($asset) => str_ends_with((string) ($asset['name'] ?? ''), '.zip')));
+
+	$release = (!empty($data['tag_name']) and $zip) ? [
+		'version' => ltrim($data['tag_name'], 'vV'),
+		'package' => $zip['browser_download_url'],
+		'url'     => $data['html_url'] ?? '',
+		'notes'   => $data['body_html'] ?? '',
+	] : [];
+
+	// A failed request is kept too, so a GitHub outage or rate limit does not slow every admin page
+	set_transient('twee_cache_release', $release, $release ? 12 * HOUR_IN_SECONDS : HOUR_IN_SECONDS);
+
+	return $release;
+}
+
+
+/**
+ * Offer the latest GitHub release as an update of this plugin
+ *
+ * WordPress compares the versions and shows the update only when the release is newer.
+ *
+ * @param array|false $update
+ * @param array       $plugin_data
+ * @param string      $plugin_file
+ *
+ * @return array|false
+ */
+function twee_cache_update_check($update, array $plugin_data, string $plugin_file)
+{
+	// An update replaces the plugin folder, so a folder linked to a working copy is never updated
+	if ($plugin_file !== plugin_basename(__FILE__) or is_link(WP_PLUGIN_DIR . '/' . dirname($plugin_file))) {
+		return $update;
+	}
+
+	$release = twee_cache_release();
+
+	if (!$release) {
+		return $update;
+	}
+
+	return [
+		'slug'    => dirname($plugin_file),
+		'version' => $release['version'],
+		'url'     => $release['url'],
+		'package' => $release['package'],
+	];
+}
+
+
+/**
+ * Show the release notes in the "View version details" window
+ *
+ * @param false|object|array $result
+ * @param string             $action
+ * @param object             $args
+ *
+ * @return false|object|array
+ */
+function twee_cache_update_details($result, string $action, $args)
+{
+	if ($action !== 'plugin_information' or ($args->slug ?? '') !== dirname(plugin_basename(__FILE__))) {
+		return $result;
+	}
+
+	$release = twee_cache_release();
+
+	if (!$release) {
+		return $result;
+	}
+
+	return (object) [
+		'name'          => 'Twee Object Cache',
+		'slug'          => $args->slug,
+		'version'       => $release['version'],
+		'homepage'      => $release['url'],
+		'download_link' => $release['package'],
+		'sections'      => ['changelog' => $release['notes']],
+	];
 }

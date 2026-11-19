@@ -55,17 +55,22 @@ Twee Object Cache can be installed as a standard WordPress plugin or as a manual
 
 ### 1. WordPress Plugin Installation (Recommended)
 
-- Switch to PHP 8.0 or a newer version.
-- Ensure Redis or Memcached is reachable, or APCu is enabled, and install the corresponding PHP extension.
-- Copy the contents of this repository's `plugin/` directory into `wp-content/plugins/twee-object-cache/`, so `twee-object-cache.php` is directly inside that directory, then activate the plugin.
+- Use PHP 8.0 or a newer version.
+- Make sure that Redis or Memcached is reachable, or APCu is enabled, and install the PHP extension for it.
+- Download `twee-object-cache-{version}.zip` from the [latest release](https://github.com/TwistedAndy/twee-object-cache/releases/latest), upload it in **Plugins → Add New → Upload Plugin**, and activate it. The plugin is installed in the `wp-content/plugins/twee-object-cache/` folder.
 - As an administrator, open the **Object Cache** menu in the WordPress Admin Bar. When no drop-in is installed, it lists the backends whose PHP extensions are loaded.
-- Select **Enable Redis**, **Enable Memcached**, or **Enable APCu**. The plugin performs a basic availability check and copies the selected drop-in to `wp-content/object-cache.php`. Disable the current drop-in before switching backends.
+- Select **Enable Redis**, **Enable Memcached**, or **Enable APCu**. The plugin examines if the backend is available, copies the selected drop-in to `wp-content/object-cache.php`, and flushes the cache. Disable the current drop-in before you select another backend.
+- Select **Disable Cache** to remove the drop-in. When you deactivate the plugin, it also removes the drop-in.
+- When another plugin installed `wp-content/object-cache.php`, the menu shows **Another object cache is installed**, and the plugin does not change or remove that file.
+- On multisite, only users with the `manage_network_options` capability see the menu, because the drop-in is shared by all sites of the network.
+
+New releases show up in **Dashboard → Updates**. After an update, the plugin replaces the drop-in with the new version. When you replace the plugin files manually, select **Disable Cache** and then enable the backend again to replace the drop-in.
 
 ### 2. Manual Drop-in Installation
 
-- Ensure Redis or Memcached is reachable, or APCu is enabled, and install the corresponding PHP extension.
+- Make sure that Redis or Memcached is reachable, or APCu is enabled, and install the PHP extension for it.
 - Copy `plugin/apcu/object-cache.php`, `plugin/memcached/object-cache.php`, or `plugin/redis/object-cache.php` to `wp-content/object-cache.php`.
-- WordPress will automatically detect the drop-in and initialize the persistent cache.
+- WordPress detects the drop-in and starts the persistent cache.
 
 ## Configuration
 
@@ -101,6 +106,28 @@ Configuration values are optional when the built-in local defaults suit the envi
 ### APCu
 
 - `WP_APCU_PERSISTENT_GROUPS` - Comma-separated string or array replacing the protected-group list. Protected groups ignore requests to make them non-persistent. Default: `plugins`, `themes`, and `counts`.
+
+## Releases
+
+Sites update from the ZIP attached to the latest GitHub release.
+
+- Change the `Version` header in `plugin/twee-object-cache.php` and in the three drop-ins to the same value.
+- Describe the release in `CHANGELOG.md` under a `## {version}` heading.
+- Commit and push.
+- Run `composer release` to build the ZIP and publish release `v{version}`. The section of the version in `CHANGELOG.md` becomes the release notes.
+- Run `composer zip` to build `build/twee-object-cache-{version}.zip` only.
+
+The release script needs the [GitHub CLI](https://cli.github.com), signed in with `gh auth login`. It stops when the versions are different, `CHANGELOG.md` has no section for the version, there are uncommitted changes, `HEAD` is not pushed, or the release exists.
+
+### Working on a Site
+
+Link the `plugin/` folder into a site instead of copying it. On Windows, run this in an admin prompt or with Developer Mode on:
+
+```bash
+cmd /c mklink /D "D:\Server\domains\work\site\wp-content\plugins\twee-object-cache" "D:\Work\wp-content\plugins\twee-object-cache\plugin"
+```
+
+WordPress never offers an update for a linked plugin folder, so an update cannot replace the working copy. The drop-in in `wp-content` is a copy, so select **Disable Cache** and enable the backend again after you change a drop-in.
 
 ## About
 
