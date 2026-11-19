@@ -3,7 +3,7 @@
  * Plugin Name: Twee Memcached Cache
  * Plugin URI: https://github.com/TwistedAndy/twee-cache
  * Description: A high-performance, lightweight Memcached object cache for WordPress and WooCommerce.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
