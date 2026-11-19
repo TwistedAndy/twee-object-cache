@@ -1,6 +1,6 @@
 {
-	"name": "twistedandy/twee-object-cache",
-	"description": "Twee Object Cache",
+	"name": "twistedandy/twee-cache",
+	"description": "Twee Cache",
 	"license": "MIT",
 	"type": "wordpress-plugin",
 	"config": {
@@ -21,7 +21,7 @@
 		"release": "@php bin/release.php publish"
 	},
 	"scripts-descriptions": {
-		"zip": "Builds build/twee-object-cache-{version}.zip from the plugin directory at HEAD.",
+		"zip": "Builds build/twee-cache-{version}.zip from the plugin directory at HEAD.",
 		"release": "Publishes the ZIP as GitHub release v{version} with its section of CHANGELOG.md as the notes."
 	}
 }

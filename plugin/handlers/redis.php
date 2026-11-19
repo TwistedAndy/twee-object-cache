@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: Twee Redis Object Cache
- * Plugin URI: https://github.com/TwistedAndy/twee-object-cache
+ * Plugin Name: Twee Redis Cache
+ * Plugin URI: https://github.com/TwistedAndy/twee-cache
  * Description: A high-performance, lightweight Redis object cache for WordPress and WooCommerce.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
@@ -190,6 +190,16 @@ class WP_Object_Cache
 
 	public int $cache_loads = 0;
 
+	/**
+	 * Log the backend calls for Query Monitor. WP_DEBUG_LOG turns it on. The plugin turns it off when Query Monitor is not active.
+	 */
+	public bool $debug = false;
+
+	/**
+	 * The backend calls of the request, when $debug is true
+	 */
+	public array $commands = [];
+
 	private array $cache = [];
 
 	private array $global_groups = [];
@@ -215,6 +225,11 @@ class WP_Object_Cache
 	private bool $active = true;
 
 	/**
+	 * The error messages of the request
+	 */
+	private array $errors = [];
+
+	/**
 	 * Set hash field TTLs with HEXPIREAT. The first command that fails sets it to false.
 	 */
 	private bool $field_expiry = false;
@@ -223,6 +238,8 @@ class WP_Object_Cache
 
 	public function __construct()
 	{
+		$this->debug = (defined('WP_DEBUG_LOG') and WP_DEBUG_LOG);
+
 		if (defined('WP_REDIS_PERSISTENT_GROUPS')) {
 			$groups = is_string(WP_REDIS_PERSISTENT_GROUPS) ? explode(',', WP_REDIS_PERSISTENT_GROUPS) : WP_REDIS_PERSISTENT_GROUPS;
 
@@ -380,14 +397,25 @@ class WP_Object_Cache
 
 		try {
 			$group_key = $this->build_group($group);
+			$start = $this->debug ? hrtime(true) : 0;
 			$value = $this->redis->hGet($group_key, $key);
+
+			if ($this->debug) {
+				$this->log_command('HGET', $group_key . ' ' . $key, $start);
+			}
 
 			if ($value !== false) {
 				// Values with TTL and boolean falses are stored as an array
 				if (is_array($value) and array_key_exists('_d', $value)) {
 					if ($this->is_expired($value, time())) {
 						// Redis before 7.4 cannot expire a hash field, so delete it here
+						$start = $this->debug ? hrtime(true) : 0;
 						$this->redis->hDel($group_key, $key);
+
+						if ($this->debug) {
+							$this->log_command('HDEL', $group_key . ' ' . $key, $start);
+						}
+
 						$this->cache_misses++;
 
 						return false;
@@ -449,7 +477,12 @@ class WP_Object_Cache
 		$group_key = $this->build_group($group);
 
 		try {
+			$start = $this->debug ? hrtime(true) : 0;
 			$cached_values = $this->redis->hMGet($group_key, $key_map);
+
+			if ($this->debug) {
+				$this->log_command('HMGET', $group_key . ' ' . implode(' ', $key_map), $start);
+			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
 			$cached_values = false;
@@ -488,7 +521,12 @@ class WP_Object_Cache
 			// Redis before 7.4 cannot expire a hash field, so delete it here
 			if ($expired) {
 				try {
+					$start = $this->debug ? hrtime(true) : 0;
 					$this->redis->hDel($group_key, ...$expired);
+
+					if ($this->debug) {
+						$this->log_command('HDEL', $group_key . ' ' . implode(' ', $expired), $start);
+					}
 				} catch (Exception $e) {
 					$this->handle_error($e);
 				}
@@ -609,20 +647,40 @@ class WP_Object_Cache
 
 		try {
 			// Use atomic hSetNx for the primary insertion to prevent race conditions
+			$start = $this->debug ? hrtime(true) : 0;
 			$added = (bool) $this->redis->hSetNx($group_key, $key, $data_to_store);
+
+			if ($this->debug) {
+				$this->log_command('HSETNX', $group_key . ' ' . $key, $start);
+			}
 
 			if (!$added) {
 				// Key already exists, check if it's expired
+				$start = $this->debug ? hrtime(true) : 0;
 				$existing = $this->redis->hGet($group_key, $key);
+
+				if ($this->debug) {
+					$this->log_command('HGET', $group_key . ' ' . $key, $start);
+				}
 
 				if ($this->is_expired($existing, time())) {
 					// It's expired, so we are allowed to overwrite it
+					$start = $this->debug ? hrtime(true) : 0;
 					$added = ($this->redis->hSet($group_key, $key, $data_to_store) !== false);
+
+					if ($this->debug) {
+						$this->log_command('HSET', $group_key . ' ' . $key, $start);
+					}
 				}
 			}
 
 			if ($added and $expire_at > 0 and $this->field_expiry) {
+				$start = $this->debug ? hrtime(true) : 0;
 				$this->field_expiry = ($this->redis->hExpireAt($group_key, $expire_at, [$key]) !== false);
+
+				if ($this->debug) {
+					$this->log_command('HEXPIREAT', $group_key . ' ' . $key, $start);
+				}
 			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
@@ -675,7 +733,12 @@ class WP_Object_Cache
 		$group_key = $this->build_group($group);
 
 		try {
+			$start = $this->debug ? hrtime(true) : 0;
 			$existing = $this->redis->hGet($group_key, $key);
+
+			if ($this->debug) {
+				$this->log_command('HGET', $group_key . ' ' . $key, $start);
+			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
 
@@ -714,7 +777,13 @@ class WP_Object_Cache
 		$error = null;
 
 		try {
-			$deleted = $this->redis->hDel($this->build_group($group), $key);
+			$group_key = $this->build_group($group);
+			$start = $this->debug ? hrtime(true) : 0;
+			$deleted = $this->redis->hDel($group_key, $key);
+
+			if ($this->debug) {
+				$this->log_command('HDEL', $group_key . ' ' . $key, $start);
+			}
 		} catch (Exception $error) {
 			$deleted = false;
 		}
@@ -766,7 +835,12 @@ class WP_Object_Cache
 		$group_key = $this->build_group($group);
 
 		try {
+			$start = $this->debug ? hrtime(true) : 0;
 			$value = $this->redis->hGet($group_key, $key);
+
+			if ($this->debug) {
+				$this->log_command('HGET', $group_key . ' ' . $key, $start);
+			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
 
@@ -820,13 +894,23 @@ class WP_Object_Cache
 
 		try {
 			do {
+				$start = $this->debug ? hrtime(true) : 0;
 				$keys = $this->redis->scan($iterator, $pattern, 1000);
+
+				if ($this->debug) {
+					$this->log_command('SCAN', $pattern, $start);
+				}
 
 				// SCAN returns false when no keys are left or on an error
 				if ($keys === false) {
 					$flushed = ($iterator === 0);
 				} elseif ($keys) {
+					$start = $this->debug ? hrtime(true) : 0;
 					$flushed = ($this->redis->unlink($keys) !== false);
+
+					if ($this->debug) {
+						$this->log_command('UNLINK', count($keys) . ' keys', $start);
+					}
 				}
 			} while ($flushed and $iterator > 0);
 		} catch (Exception $error) {
@@ -864,10 +948,16 @@ class WP_Object_Cache
 		$group_key = $this->build_group($group);
 
 		try {
+			$start = $this->debug ? hrtime(true) : 0;
+
 			if (method_exists($this->redis, 'unlink')) {
 				$this->redis->unlink($group_key);
 			} else {
 				$this->redis->del($group_key);
+			}
+
+			if ($this->debug) {
+				$this->log_command('UNLINK', $group_key, $start);
 			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
@@ -928,6 +1018,70 @@ class WP_Object_Cache
 	}
 
 	/**
+	 * Get the details of the cache for the Query Monitor panel
+	 *
+	 * @return array The engine, the status, the details, the runtime groups and the errors
+	 */
+	public function debug_info(): array
+	{
+		$details = [
+			'Key salt'       => $this->key_salt,
+			'Database'       => defined('WP_REDIS_DATABASE') ? (int) WP_REDIS_DATABASE : 0,
+			'Hash field TTL' => $this->field_expiry ? 'HEXPIREAT' : 'Deleted on read',
+		];
+
+		if ($this->active) {
+			try {
+				$start = hrtime(true);
+				$this->redis->ping();
+				$latency = hrtime(true) - $start;
+
+				$server = $this->redis->info();
+				$details['Version'] = $server['redis_version'] ?? '';
+				$details['Memory'] = ($server['used_memory_human'] ?? '') . (!empty($server['maxmemory']) ? ' / ' . $server['maxmemory_human'] : '');
+				$details['Keys'] = $this->redis->dbSize();
+				$details['Latency'] = number_format($latency / 1e3) . ' µs';
+			} catch (Exception $e) {
+				$details['Server'] = $e->getMessage();
+			}
+		}
+
+		$groups = [];
+
+		foreach ($this->cache as $group => $values) {
+			$groups[$group] = [
+				'entries' => count($values),
+				'type'    => isset($this->non_persistent_groups[$group]) ? 'non-persistent' : (isset($this->global_groups[$group]) ? 'global' : ''),
+			];
+		}
+
+		return [
+			'engine'  => 'Redis',
+			'active'  => $this->active,
+			'details' => $details,
+			'groups'  => $groups,
+			'errors'  => $this->errors,
+		];
+	}
+
+	/**
+	 * Store a backend call for the Query Monitor panel
+	 *
+	 * @param string $command The Redis command
+	 * @param string $target  The key and the fields of the command
+	 * @param int    $start   The hrtime() value before the call
+	 */
+	private function log_command(string $command, string $target, int $start): void
+	{
+		$this->commands[] = [
+			'command' => $command,
+			'target'  => $target,
+			'time'    => (hrtime(true) - $start) / 1e6,
+			'trace'   => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS),
+		];
+	}
+
+	/**
 	 * Log an error. Deactivate the cache and flag a flush if $flush is true or Redis does not reply to PING.
 	 *
 	 * @param Exception|null $e     The exception, or null to log the last error reply of Redis
@@ -938,6 +1092,7 @@ class WP_Object_Cache
 		$message = $e ? $e->getMessage() : ($this->redis->getLastError() ? : 'Unknown error');
 
 		$this->redis->clearLastError();
+		$this->errors[] = $message;
 
 		if (!$flush) {
 			try {
@@ -955,7 +1110,7 @@ class WP_Object_Cache
 			}
 		}
 
-		trigger_error('Twee Redis Object Cache: ' . $message, E_USER_NOTICE);
+		trigger_error('Twee Redis Cache: ' . $message, E_USER_NOTICE);
 	}
 
 	/**
@@ -969,9 +1124,11 @@ class WP_Object_Cache
 	private function write(string $group_key, array $values, int $expire_at): bool
 	{
 		$error = null;
+		$pipeline = ($expire_at > 0 and $this->field_expiry);
+		$start = $this->debug ? hrtime(true) : 0;
 
 		try {
-			if ($expire_at > 0 and $this->field_expiry) {
+			if ($pipeline) {
 				$result = $this->redis->pipeline()->hMSet($group_key, $values)->hExpireAt($group_key, $expire_at, array_keys($values))->exec();
 				$stored = (is_array($result) and $result[0] !== false);
 				$this->field_expiry = ($stored and $result[1] !== false);
@@ -980,6 +1137,10 @@ class WP_Object_Cache
 			}
 		} catch (Exception $error) {
 			$stored = false;
+		}
+
+		if ($this->debug) {
+			$this->log_command($pipeline ? 'HMSET+HEXPIREAT' : 'HMSET', $group_key . ' ' . implode(' ', array_keys($values)), $start);
 		}
 
 		if (!$stored) {

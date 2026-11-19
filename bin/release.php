@@ -2,7 +2,7 @@
 /**
  * Build the plugin ZIP and publish it as a GitHub release
  *
- * composer zip       Builds build/twee-object-cache-{version}.zip from the plugin/ directory at HEAD
+ * composer zip       Builds build/twee-cache-{version}.zip from the plugin/ directory at HEAD
  * composer release   Builds the ZIP and publishes release v{version} with its section of CHANGELOG.md as the notes
  */
 
@@ -43,19 +43,19 @@ function release_run(string $command): string
 // Sites compare the plugin header with the release tag, and the plugin replaces a drop-in when its version changes
 $versions = [];
 
-foreach (['twee-object-cache.php', 'redis/object-cache.php', 'memcached/object-cache.php', 'apcu/object-cache.php'] as $file) {
+foreach (['twee-cache.php', 'handlers/redis.php', 'handlers/memcached.php', 'handlers/apcu.php'] as $file) {
 	preg_match('/^\s*\*\s*Version:\s*(\S+)/m', (string) file_get_contents('plugin/' . $file), $header);
 	$versions[$file] = $header[1] ?? '';
 }
 
-$version = $versions['twee-object-cache.php'];
+$version = $versions['twee-cache.php'];
 
 if (!$version or count(array_unique($versions)) > 1) {
 	release_fail("The Version headers in plugin/ do not match:\n" . print_r($versions, true));
 }
 
 $tag = 'v' . $version;
-$zip = "build/twee-object-cache-$version.zip";
+$zip = "build/twee-cache-$version.zip";
 $publish = ($argv[1] ?? '') === 'publish';
 $notes = 'build/notes.md';
 
@@ -90,12 +90,12 @@ if ($publish) {
 	}
 }
 
-// The prefix makes WordPress install and update the plugin in its twee-object-cache folder
+// The prefix makes WordPress install and update the plugin in its twee-cache folder
 if (!is_dir('build')) {
 	mkdir('build');
 }
 
-release_run("git archive --format=zip --prefix=twee-object-cache/ -o $zip HEAD:plugin");
+release_run("git archive --format=zip --prefix=twee-cache/ -o $zip HEAD:plugin");
 echo "Built $zip from HEAD." . PHP_EOL;
 
 if ($publish) {

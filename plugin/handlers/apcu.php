@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: Twee APCu Object Cache
- * Plugin URI: https://github.com/TwistedAndy/twee-object-cache
+ * Plugin Name: Twee APCu Cache
+ * Plugin URI: https://github.com/TwistedAndy/twee-cache
  * Description: A high-performance, lightweight APCu object cache for WordPress and WooCommerce.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
@@ -189,6 +189,16 @@ class WP_Object_Cache {
 
 	public int $cache_loads = 0;
 
+	/**
+	 * Log the backend calls for Query Monitor. WP_DEBUG_LOG turns it on. The plugin turns it off when Query Monitor is not active.
+	 */
+	public bool $debug = false;
+
+	/**
+	 * The backend calls of the request, when $debug is true
+	 */
+	public array $commands = [];
+
 	private array $cache = [];
 
 	private array $persistent_groups = [
@@ -211,8 +221,15 @@ class WP_Object_Cache {
 
 	private bool $active = true;
 
+	/**
+	 * The error messages of the request
+	 */
+	private array $errors = [];
+
 	public function __construct()
 	{
+		$this->debug = (defined('WP_DEBUG_LOG') and WP_DEBUG_LOG);
+
 		if (defined('WP_APCU_PERSISTENT_GROUPS')) {
 			$groups = is_string(WP_APCU_PERSISTENT_GROUPS) ? explode(',', WP_APCU_PERSISTENT_GROUPS) : WP_APCU_PERSISTENT_GROUPS;
 
@@ -284,7 +301,13 @@ class WP_Object_Cache {
 		$this->cache_loads++;
 
 		// Check APCu
+		$start = $this->debug ? hrtime(true) : 0;
 		$value = apcu_fetch($cache_key, $found);
+
+		if ($this->debug) {
+			$this->log_command('apcu_fetch', $cache_key, $start);
+		}
+
 		if ($found) {
 			$this->cache_hits++;
 			$this->cache[$group][$key] = $value; // Store in runtime for subsequent calls
@@ -334,7 +357,12 @@ class WP_Object_Cache {
 
 		$cache_key = $this->build_key($key, $group);
 
+		$start = $this->debug ? hrtime(true) : 0;
 		$stored = apcu_store($cache_key, $data, (int) $expire);
+
+		if ($this->debug) {
+			$this->log_command('apcu_store', $cache_key, $start);
+		}
 
 		if (!$stored) {
 			if (!apcu_enabled()) {
@@ -381,8 +409,18 @@ class WP_Object_Cache {
 		}
 
 		// apcu_add() is atomic, so only one request can add the key
-		if (!isset($this->non_persistent_groups[$group]) and $this->active and !apcu_add($this->build_key($key, $group), $data, $expire)) {
-			return false;
+		if (!isset($this->non_persistent_groups[$group]) and $this->active) {
+			$cache_key = $this->build_key($key, $group);
+			$start = $this->debug ? hrtime(true) : 0;
+			$added = apcu_add($cache_key, $data, $expire);
+
+			if ($this->debug) {
+				$this->log_command('apcu_add', $cache_key, $start);
+			}
+
+			if (!$added) {
+				return false;
+			}
 		}
 
 		$this->cache[$group][$key] = $data;
@@ -424,8 +462,17 @@ class WP_Object_Cache {
 		$cache_key = $this->build_key($key, $group);
 
 		// If it doesn't exist in APCu and it's a persistent group, fail the replace
-		if (!isset($this->non_persistent_groups[$group]) and $this->active and !apcu_exists($cache_key)) {
-			return false;
+		if (!isset($this->non_persistent_groups[$group]) and $this->active) {
+			$start = $this->debug ? hrtime(true) : 0;
+			$exists = apcu_exists($cache_key);
+
+			if ($this->debug) {
+				$this->log_command('apcu_exists', $cache_key, $start);
+			}
+
+			if (!$exists) {
+				return false;
+			}
 		}
 
 		return $this->set($key, $data, $group, $expire);
@@ -450,7 +497,14 @@ class WP_Object_Cache {
 
 		$cache_key = $this->build_key($key, $group);
 
-		return (apcu_delete($cache_key) or $deleted_runtime);
+		$start = $this->debug ? hrtime(true) : 0;
+		$deleted = apcu_delete($cache_key);
+
+		if ($this->debug) {
+			$this->log_command('apcu_delete', $cache_key, $start);
+		}
+
+		return ($deleted or $deleted_runtime);
 	}
 
 	public function delete_multiple(array $keys, string $group = 'default'): array
@@ -485,12 +539,24 @@ class WP_Object_Cache {
 
 		$cache_key = $this->build_key($key, $group);
 
-		if (!apcu_exists($cache_key)) {
+		$start = $this->debug ? hrtime(true) : 0;
+		$exists = apcu_exists($cache_key);
+
+		if ($this->debug) {
+			$this->log_command('apcu_exists', $cache_key, $start);
+		}
+
+		if (!$exists) {
 			return false;
 		}
 
 		$success = false;
+		$start = $this->debug ? hrtime(true) : 0;
 		$value = apcu_inc($cache_key, $offset, $success);
+
+		if ($this->debug) {
+			$this->log_command('apcu_inc', $cache_key, $start);
+		}
 
 		if ($success) {
 			$this->cache[$group][$key] = $value;
@@ -526,14 +592,26 @@ class WP_Object_Cache {
 
 		$cache_key = $this->build_key($key, $group);
 
-		if (!apcu_exists($cache_key)) {
+		$start = $this->debug ? hrtime(true) : 0;
+		$exists = apcu_exists($cache_key);
+
+		if ($this->debug) {
+			$this->log_command('apcu_exists', $cache_key, $start);
+		}
+
+		if (!$exists) {
 			return false;
 		}
 
 		$success = false;
 
 		// APCu handles decrementing natively
+		$start = $this->debug ? hrtime(true) : 0;
 		$value = apcu_dec($cache_key, $offset, $success);
+
+		if ($this->debug) {
+			$this->log_command('apcu_dec', $cache_key, $start);
+		}
 
 		if ($success) {
 			$this->cache[$group][$key] = $value;
@@ -555,8 +633,12 @@ class WP_Object_Cache {
 		if ($this->active) {
 			// Flush only keys belonging to this installation
 			$pattern = '/^' . preg_quote($this->key_salt . ':', '/') . '/';
-			$iterator = new APCUIterator($pattern, APC_ITER_KEY, 100);
-			apcu_delete($iterator);
+			$start = $this->debug ? hrtime(true) : 0;
+			apcu_delete(new APCUIterator($pattern, APC_ITER_KEY, 100));
+
+			if ($this->debug) {
+				$this->log_command('apcu_delete', $pattern, $start);
+			}
 		}
 
 		return true;
@@ -591,8 +673,12 @@ class WP_Object_Cache {
 
 		// Clear from APCu
 		$pattern = '/^' . preg_quote($needle, '/') . '/';
-		$iterator = new APCUIterator($pattern, APC_ITER_KEY, 100);
-		apcu_delete($iterator);
+		$start = $this->debug ? hrtime(true) : 0;
+		apcu_delete(new APCUIterator($pattern, APC_ITER_KEY, 100));
+
+		if ($this->debug) {
+			$this->log_command('apcu_delete', $pattern, $start);
+		}
 
 		return true;
 	}
@@ -646,11 +732,66 @@ class WP_Object_Cache {
 	}
 
 	/**
+	 * Get the details of the cache for the Query Monitor panel
+	 *
+	 * @return array The engine, the status, the details, the runtime groups and the errors
+	 */
+	public function debug_info(): array
+	{
+		$details = [
+			'Key salt' => $this->key_salt,
+		];
+
+		if ($this->active) {
+			$cache = apcu_cache_info(true);
+			$memory = apcu_sma_info(true);
+
+			$details['Memory'] = size_format((int) ($cache['mem_size'] ?? 0)) . ' / ' . size_format((int) (($memory['num_seg'] ?? 0) * ($memory['seg_size'] ?? 0)));
+			$details['Keys'] = $cache['num_entries'] ?? 0;
+		}
+
+		$groups = [];
+
+		foreach ($this->cache as $group => $values) {
+			$groups[$group] = [
+				'entries' => count($values),
+				'type'    => isset($this->non_persistent_groups[$group]) ? 'non-persistent' : (isset($this->global_groups[$group]) ? 'global' : ''),
+			];
+		}
+
+		return [
+			'engine'  => 'APCu',
+			'active'  => $this->active,
+			'details' => $details,
+			'groups'  => $groups,
+			'errors'  => $this->errors,
+		];
+	}
+
+	/**
+	 * Store a backend call for the Query Monitor panel
+	 *
+	 * @param string $command The APCu function
+	 * @param string $target  The key or the key pattern
+	 * @param int    $start   The hrtime() value before the call
+	 */
+	private function log_command(string $command, string $target, int $start): void
+	{
+		$this->commands[] = [
+			'command' => $command,
+			'target'  => $target,
+			'time'    => (hrtime(true) - $start) / 1e6,
+			'trace'   => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS),
+		];
+	}
+
+	/**
 	 * Deactivate the cache for the rest of a request and trigger
 	 * a failure via trigger_error() with WP_DEBUG support
 	 */
 	private function handle_error(string $message): void
 	{
+		$this->errors[] = $message;
 		$this->active = false;
 
 		$flag_file = __DIR__ . '/.ocflush';
@@ -659,7 +800,7 @@ class WP_Object_Cache {
 			@touch($flag_file);
 		}
 
-		trigger_error('Twee APCu Object Cache: ' . $message, E_USER_WARNING);
+		trigger_error('Twee APCu Cache: ' . $message, E_USER_WARNING);
 	}
 
 	/**

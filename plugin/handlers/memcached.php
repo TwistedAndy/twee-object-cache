@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: Twee Memcached Object Cache
- * Plugin URI: https://github.com/TwistedAndy/twee-object-cache
+ * Plugin Name: Twee Memcached Cache
+ * Plugin URI: https://github.com/TwistedAndy/twee-cache
  * Description: A high-performance, lightweight Memcached object cache for WordPress and WooCommerce.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
@@ -189,6 +189,16 @@ class WP_Object_Cache
 
 	public int $cache_loads = 0;
 
+	/**
+	 * Log the backend calls for Query Monitor. WP_DEBUG_LOG turns it on. The plugin turns it off when Query Monitor is not active.
+	 */
+	public bool $debug = false;
+
+	/**
+	 * The backend calls of the request, when $debug is true
+	 */
+	public array $commands = [];
+
 	private array $cache = [];
 
 	private array $global_groups = [];
@@ -218,6 +228,11 @@ class WP_Object_Cache
 
 	private bool $active = false;
 
+	/**
+	 * The error messages of the request
+	 */
+	private array $errors = [];
+
 	private Memcached $memcached;
 
 	private string $serializer = 'serialize';
@@ -226,6 +241,8 @@ class WP_Object_Cache
 
 	public function __construct()
 	{
+		$this->debug = (defined('WP_DEBUG_LOG') and WP_DEBUG_LOG);
+
 		if (defined('WP_MEMCACHED_PERSISTENT_GROUPS')) {
 			$groups = is_string(WP_MEMCACHED_PERSISTENT_GROUPS) ? explode(',', WP_MEMCACHED_PERSISTENT_GROUPS) : WP_MEMCACHED_PERSISTENT_GROUPS;
 
@@ -326,7 +343,12 @@ class WP_Object_Cache
 		 */
 		$this->site_salt = $this->key_salt;
 		$flush_key = $this->site_salt . ':flush';
+		$start = $this->debug ? hrtime(true) : 0;
 		$version = $this->memcached->get($flush_key);
+
+		if ($this->debug) {
+			$this->log_command('get', $flush_key, $start);
+		}
 
 		if ($this->memcached->getResultCode() === Memcached::RES_NOTFOUND) {
 			// Use add() so concurrent requests agree on a single version
@@ -398,7 +420,13 @@ class WP_Object_Cache
 		$this->cache_loads++;
 
 		// Check Memcached
-		$value = $this->memcached->get($this->build_key($key, $group));
+		$cache_key = $this->build_key($key, $group);
+		$start = $this->debug ? hrtime(true) : 0;
+		$value = $this->memcached->get($cache_key);
+
+		if ($this->debug) {
+			$this->log_command('get', $cache_key, $start);
+		}
 		$code = $this->memcached->getResultCode();
 
 		if ($code === Memcached::RES_SUCCESS) {
@@ -463,7 +491,12 @@ class WP_Object_Cache
 		$this->cache_loads++;
 
 		// Bulk fetch missing keys from Memcached
+		$start = $this->debug ? hrtime(true) : 0;
 		$cached_values = $this->memcached->getMulti($cache_keys);
+
+		if ($this->debug) {
+			$this->log_command('getMulti', implode(' ', $cache_keys), $start);
+		}
 		$code = $this->memcached->getResultCode();
 
 		if ($code !== Memcached::RES_SUCCESS and $code !== Memcached::RES_NOTFOUND) {
@@ -531,7 +564,13 @@ class WP_Object_Cache
 			$expire += time();
 		}
 
-		$result = $this->memcached->set($this->build_key($key, $group), $data, $expire);
+		$cache_key = $this->build_key($key, $group);
+		$start = $this->debug ? hrtime(true) : 0;
+		$result = $this->memcached->set($cache_key, $data, $expire);
+
+		if ($this->debug) {
+			$this->log_command('set', $cache_key, $start);
+		}
 
 		if (!$result) {
 			if ($this->memcached->getResultCode() === Memcached::RES_E2BIG) {
@@ -594,7 +633,13 @@ class WP_Object_Cache
 			$expire += time();
 		}
 
-		$added = $this->memcached->add($this->build_key($key, $group), $data, $expire);
+		$cache_key = $this->build_key($key, $group);
+		$start = $this->debug ? hrtime(true) : 0;
+		$added = $this->memcached->add($cache_key, $data, $expire);
+
+		if ($this->debug) {
+			$this->log_command('add', $cache_key, $start);
+		}
 
 		if (!$added) {
 			$code = $this->memcached->getResultCode();
@@ -645,7 +690,13 @@ class WP_Object_Cache
 				$expire += time();
 			}
 
-			$replaced = $this->memcached->replace($this->build_key($key, $group), $data, $expire);
+			$cache_key = $this->build_key($key, $group);
+			$start = $this->debug ? hrtime(true) : 0;
+			$replaced = $this->memcached->replace($cache_key, $data, $expire);
+
+			if ($this->debug) {
+				$this->log_command('replace', $cache_key, $start);
+			}
 
 			if (!$replaced and $this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
 				if ($this->memcached->getResultCode() === Memcached::RES_E2BIG) {
@@ -684,7 +735,13 @@ class WP_Object_Cache
 		}
 
 		// Chunks of a chunked value stay until Memcached evicts them. No request reads them again.
-		$deleted = $this->memcached->delete($this->build_key($key, $group));
+		$cache_key = $this->build_key($key, $group);
+		$start = $this->debug ? hrtime(true) : 0;
+		$deleted = $this->memcached->delete($cache_key);
+
+		if ($this->debug) {
+			$this->log_command('delete', $cache_key, $start);
+		}
 		$code = $this->memcached->getResultCode();
 
 		if (!$deleted and $code !== Memcached::RES_NOTFOUND) {
@@ -729,7 +786,12 @@ class WP_Object_Cache
 		}
 
 		// Chunks of a chunked value stay until Memcached evicts them. No request reads them again.
+		$start = $this->debug ? hrtime(true) : 0;
 		$results = $this->memcached->deleteMulti(array_values($memcached_keys));
+
+		if ($this->debug) {
+			$this->log_command('deleteMulti', implode(' ', $memcached_keys), $start);
+		}
 
 		if (is_array($results)) {
 			$failed = false;
@@ -781,7 +843,13 @@ class WP_Object_Cache
 			return $value;
 		}
 
-		$value = $this->memcached->increment($this->build_key($key, $group), $offset);
+		$cache_key = $this->build_key($key, $group);
+		$start = $this->debug ? hrtime(true) : 0;
+		$value = $this->memcached->increment($cache_key, $offset);
+
+		if ($this->debug) {
+			$this->log_command('increment', $cache_key, $start);
+		}
 		$code = $this->memcached->getResultCode();
 
 		if ($code === Memcached::RES_SUCCESS) {
@@ -820,7 +888,12 @@ class WP_Object_Cache
 
 		// Memcached's native decrement clamps to 0; use a get/modify/set cycle
 		// so the counter can go negative (matching WP core behavior).
+		$start = $this->debug ? hrtime(true) : 0;
 		$current = $this->memcached->get($cache_key);
+
+		if ($this->debug) {
+			$this->log_command('get', $cache_key, $start);
+		}
 		$code = $this->memcached->getResultCode();
 
 		if ($code === Memcached::RES_NOTFOUND) {
@@ -838,7 +911,12 @@ class WP_Object_Cache
 		}
 
 		$value = (int) $current - $offset;
+		$start = $this->debug ? hrtime(true) : 0;
 		$this->memcached->set($cache_key, (string) $value);
+
+		if ($this->debug) {
+			$this->log_command('set', $cache_key, $start);
+		}
 		$this->cache[$group][$key] = $value;
 
 		return $value;
@@ -853,8 +931,14 @@ class WP_Object_Cache
 		}
 
 		$version = bin2hex(random_bytes(4));
+		$start = $this->debug ? hrtime(true) : 0;
+		$stored = $this->memcached->set($this->site_salt . ':flush', $version, 0);
 
-		if (!$this->memcached->set($this->site_salt . ':flush', $version, 0)) {
+		if ($this->debug) {
+			$this->log_command('set', $this->site_salt . ':flush', $start);
+		}
+
+		if (!$stored) {
 			// Old values stay available, so stop using the cache until the next request flushes it
 			$this->handle_error($this->memcached->getResultMessage(), true);
 
@@ -899,7 +983,12 @@ class WP_Object_Cache
 
 		// Clean up the harvested keys from Memcached to minimize stale memory bloat
 		if (!empty($keys_to_delete)) {
+			$start = $this->debug ? hrtime(true) : 0;
 			$this->memcached->deleteMulti($keys_to_delete);
+
+			if ($this->debug) {
+				$this->log_command('deleteMulti', implode(' ', $keys_to_delete), $start);
+			}
 
 			$code = $this->memcached->getResultCode();
 
@@ -923,7 +1012,12 @@ class WP_Object_Cache
 
 		$version = bin2hex(random_bytes(8));
 		$version_key = $this->key_salt . ':group:' . $namespaced_group;
+		$start = $this->debug ? hrtime(true) : 0;
 		$version_stored = $this->memcached->set($version_key, $version, 0);
+
+		if ($this->debug) {
+			$this->log_command('set', $version_key, $start);
+		}
 
 		if (!$version_stored or $this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
 			$this->handle_error($this->memcached->getResultMessage());
@@ -988,10 +1082,85 @@ class WP_Object_Cache
 	}
 
 	/**
+	 * Get the details of the cache for the Query Monitor panel
+	 *
+	 * @return array The engine, the status, the details, the runtime groups and the errors
+	 */
+	public function debug_info(): array
+	{
+		$details = [
+			'Key salt' => $this->key_salt,
+		];
+
+		if ($this->active) {
+			$start = hrtime(true);
+			$this->memcached->getVersion();
+			$latency = hrtime(true) - $start;
+
+			$versions = [];
+			$bytes = 0;
+			$limit = 0;
+			$keys = 0;
+
+			// The totals of all servers
+			foreach ((array) $this->memcached->getStats() as $data) {
+				if (is_array($data) and !empty($data['pid'])) {
+					$versions[] = $data['version'] ?? '';
+					$bytes += (int) ($data['bytes'] ?? 0);
+					$limit += (int) ($data['limit_maxbytes'] ?? 0);
+					$keys += (int) ($data['curr_items'] ?? 0);
+				}
+			}
+
+			$details['Servers'] = count($versions);
+			$details['Version'] = implode(', ', array_unique($versions));
+			$details['Memory'] = size_format($bytes) . ' / ' . size_format($limit);
+			$details['Keys'] = $keys;
+			$details['Latency'] = number_format($latency / 1e3) . ' µs';
+		}
+
+		$groups = [];
+
+		foreach ($this->cache as $group => $values) {
+			$groups[$group] = [
+				'entries' => count($values),
+				'type'    => isset($this->non_persistent_groups[$group]) ? 'non-persistent' : (isset($this->global_groups[$group]) ? 'global' : ''),
+			];
+		}
+
+		return [
+			'engine'  => 'Memcached',
+			'active'  => $this->active,
+			'details' => $details,
+			'groups'  => $groups,
+			'errors'  => $this->errors,
+		];
+	}
+
+	/**
+	 * Store a backend call for the Query Monitor panel
+	 *
+	 * @param string $command The Memcached method
+	 * @param string $target  The keys of the call
+	 * @param int    $start   The hrtime() value before the call
+	 */
+	private function log_command(string $command, string $target, int $start): void
+	{
+		$this->commands[] = [
+			'command' => $command,
+			'target'  => $target,
+			'time'    => (hrtime(true) - $start) / 1e6,
+			'trace'   => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS),
+		];
+	}
+
+	/**
 	 * Deactivate the cache and flag a full flush on a real outage or when forced
 	 */
 	private function handle_error(string $message, bool $disable = false): void
 	{
+		$this->errors[] = $message;
+
 		$active = false;
 		$stats = $disable ? false : $this->memcached->getStats();
 
@@ -1012,7 +1181,7 @@ class WP_Object_Cache
 			}
 		}
 
-		trigger_error('Twee Memcached Object Cache: ' . $message, E_USER_WARNING);
+		trigger_error('Twee Memcached Cache: ' . $message, E_USER_WARNING);
 	}
 
 	/**
@@ -1044,7 +1213,12 @@ class WP_Object_Cache
 			$cache_keys[] = $this->build_key((string) $chunk_key, $group);
 		}
 
+		$start = $this->debug ? hrtime(true) : 0;
 		$chunks = $this->memcached->getMulti($cache_keys);
+
+		if ($this->debug) {
+			$this->log_command('getMulti', implode(' ', $cache_keys), $start);
+		}
 		$code = $this->memcached->getResultCode();
 
 		if ($code !== Memcached::RES_SUCCESS and $code !== Memcached::RES_NOTFOUND) {
@@ -1076,7 +1250,12 @@ class WP_Object_Cache
 	private function set_chunked_value(int|string $key, mixed $data, string $group, int $expire, string $operation = 'set'): bool
 	{
 		$cache_key = $this->build_key($key, $group);
+		$start = $this->debug ? hrtime(true) : 0;
 		$previous = $this->memcached->get($cache_key);
+
+		if ($this->debug) {
+			$this->log_command('get', $cache_key, $start);
+		}
 		$previous_chunk_keys = [];
 
 		if (is_array($previous) and !empty($previous['__chunk_list']) and is_array($previous['__chunk_list'])) {
@@ -1100,7 +1279,12 @@ class WP_Object_Cache
 			$multi_set[$this->build_key($chunk_key, $group)] = $chunk;
 		}
 
+		$start = $this->debug ? hrtime(true) : 0;
 		$chunks_stored = $this->memcached->setMulti($multi_set, $expire);
+
+		if ($this->debug) {
+			$this->log_command('setMulti', implode(' ', array_keys($multi_set)), $start);
+		}
 
 		if (!$chunks_stored) {
 			$message = $this->memcached->getResultMessage();
@@ -1110,12 +1294,18 @@ class WP_Object_Cache
 			return false;
 		}
 
+		$start = $this->debug ? hrtime(true) : 0;
+
 		if ($operation === 'add') {
 			$list_stored = $this->memcached->add($cache_key, ['__chunk_list' => $chunk_keys], $expire);
 		} elseif ($operation === 'replace') {
 			$list_stored = $this->memcached->replace($cache_key, ['__chunk_list' => $chunk_keys], $expire);
 		} else {
 			$list_stored = $this->memcached->set($cache_key, ['__chunk_list' => $chunk_keys], $expire);
+		}
+
+		if ($this->debug) {
+			$this->log_command($operation, $cache_key, $start);
 		}
 
 		if (!$list_stored) {
@@ -1159,7 +1349,12 @@ class WP_Object_Cache
 		}
 
 		$version_key = $this->key_salt . ':group:' . $namespaced_group;
+		$start = $this->debug ? hrtime(true) : 0;
 		$version_number = $this->memcached->get($version_key);
+
+		if ($this->debug) {
+			$this->log_command('get', $version_key, $start);
+		}
 
 		if ($this->memcached->getResultCode() === Memcached::RES_NOTFOUND) {
 			// Use add() so concurrent requests agree on a single version

@@ -1,21 +1,22 @@
-# Twee Object Cache
+# Twee Cache
 
-**Twee Object Cache** is a suite of high-performance, lightweight object caches built for large-scale WordPress and WooCommerce projects. It provides drop-in replacements for WordPress's in-memory runtime cache, adding backend storage that persists between requests.
+**Twee Cache** is a suite of high-performance, lightweight object caches built for large-scale WordPress and WooCommerce projects. It provides drop-in replacements for WordPress's in-memory runtime cache, adding backend storage that persists between requests.
 
 This repository contains caching plugins for three different backends: **APCu**, **Memcached**, and **Redis**. The changes of each release are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Installation
 
-Twee Object Cache can be installed as a standard WordPress plugin or as a manual drop-in.
+Twee Cache can be installed as a standard WordPress plugin or as a manual drop-in.
 
 ### 1. WordPress Plugin Installation (Recommended)
 
 - Use PHP 8.0 or a newer version.
 - Make sure that Redis or Memcached is reachable, or APCu is enabled, and install the PHP extension for it.
-- Download `twee-object-cache-{version}.zip` from the [latest release](https://github.com/TwistedAndy/twee-object-cache/releases/latest), upload it in **Plugins → Add New → Upload Plugin**, and activate it. The plugin is installed in the `wp-content/plugins/twee-object-cache/` folder.
+- Download `twee-cache-{version}.zip` from the [latest release](https://github.com/TwistedAndy/twee-cache/releases/latest), upload it in **Plugins → Add New → Upload Plugin**, and activate it. The plugin is installed in the `wp-content/plugins/twee-cache/` folder.
 - As an administrator, open the **Object Cache** menu in the WordPress Admin Bar. When no drop-in is installed, it lists the backends whose PHP extensions are loaded.
 - Select **Enable Redis**, **Enable Memcached**, or **Enable APCu**. The plugin examines if the backend is available, copies the selected drop-in to `wp-content/object-cache.php`, and flushes the cache. Disable the current drop-in before you select another backend.
 - Select **Disable Cache** to remove the drop-in. When you deactivate the plugin, it also removes the drop-in.
+- When a drop-in is installed, the menu also shows the engine, the hit ratio with the hits and misses, and the backend reads of the page. It also shows the memory and the number of keys of the backend, and the latency of one request to it. The menu sends one or two requests to the backend to get these values. In wp-admin, the Admin Bar shows before most of the page, so the page values are not complete.
 - When another plugin installed `wp-content/object-cache.php`, the menu shows **Another object cache is installed**, and the plugin does not change or remove that file.
 - On multisite, only users with the `manage_network_options` capability see the menu, because the drop-in is shared by all sites of the network.
 
@@ -24,7 +25,7 @@ New releases show up in **Dashboard → Updates**. After an update, the plugin r
 ### 2. Manual Drop-in Installation
 
 - Make sure that Redis or Memcached is reachable, or APCu is enabled, and install the PHP extension for it.
-- Copy `plugin/apcu/object-cache.php`, `plugin/memcached/object-cache.php`, or `plugin/redis/object-cache.php` to `wp-content/object-cache.php`.
+- Copy `plugin/handlers/apcu.php`, `plugin/handlers/memcached.php`, or `plugin/handlers/redis.php` to `wp-content/object-cache.php`.
 - WordPress detects the drop-in and starts the persistent cache.
 
 ## Features
@@ -69,6 +70,25 @@ New releases show up in **Dashboard → Updates**. After an update, the plugin r
 - Backend initialization failures create WordPress admin notices. Runtime Redis errors use `E_USER_NOTICE`; Memcached and selected APCu errors use `E_USER_WARNING`. Display and logging follow the site's PHP and WordPress error configuration.
 - On detected Redis or Memcached failures, the drop-in attempts to create an internal `.ocflush` marker. On a later successful initialization, Redis deletes all keys with the key salt and Memcached changes the site version before the marker is removed. This best-effort recovery requires the deployed drop-in directory to be writable.
 
+## Query Monitor
+
+When [Query Monitor](https://wordpress.org/plugins/query-monitor/) is active, the plugin replaces its **Object Cache** panel. The panel shows data that the drop-in collects on each request, so it does not make the cache slower:
+
+- The engine, and if the backend is connected.
+- The hits, misses, hit rate, sets and backend reads of the runtime cache.
+- The key salt and the server details, such as the version, the memory, the number of keys, and the latency of one request.
+- The errors of the request.
+- The groups in the runtime cache, with their type and number of entries.
+
+Set `WP_DEBUG_LOG` to `true` in `wp-config.php` to log each backend call. Then the panel also shows the number of backend calls, their total time, and their share of the request time. The **Commands** panel under it lists each call with its key, caller, component and time. You can filter the list by command and by component.
+
+- When `WP_DEBUG_LOG` is `false`, the panels show a message about it.
+- The log stops at `plugins_loaded` when Query Monitor is not active.
+- Without the log, each backend call adds two boolean checks. Runtime cache hits do not change.
+- The log records a backtrace for each backend call, so use it only on development sites.
+- The panels need the plugin. A drop-in that you installed manually shows the panel of Query Monitor.
+- Query Monitor shows the panels of plugins after its own panels. A small script moves **Object Cache** below **Database Queries** in both Query Monitor menus.
+
 ## Configuration
 
 Configuration values are optional when the built-in local defaults suit the environment. Define constants in `wp-config.php` before WordPress loads the object-cache drop-in.
@@ -107,11 +127,14 @@ Configuration values are optional when the built-in local defaults suit the envi
 ## Development
 
 ```
-├── plugin/                    The plugin, as it is installed in wp-content/plugins/twee-object-cache/
-│   ├── twee-object-cache.php  Admin Bar menu, drop-in install and removal, updates from GitHub
-│   ├── apcu/                  APCu drop-in
-│   ├── memcached/             Memcached drop-in
-│   └── redis/                 Redis drop-in
+├── plugin/                    The plugin, as it is installed in wp-content/plugins/twee-cache/
+│   ├── twee-cache.php         Loads the includes, adds the hooks, replaces an older drop-in on activation, removes it on deactivation
+│   ├── handlers/              The drop-ins: apcu.php, memcached.php, redis.php
+│   └── includes/
+│       ├── admin.php          Admin Bar menu and its actions
+│       ├── dropin.php         Drop-in install, engine detection, Query Monitor connection
+│       ├── monitor.php        Query Monitor panels
+│       └── update.php         Updates from GitHub, drop-in replacement after an update
 ├── tests/                     PHPUnit integration tests
 ├── bin/release.php            Builds and publishes releases
 └── CHANGELOG.md               Release notes
@@ -129,11 +152,11 @@ Configuration values are optional when the built-in local defaults suit the envi
 
 Sites update from the ZIP attached to the latest GitHub release.
 
-- Change the `Version` header in `plugin/twee-object-cache.php` and in the three drop-ins to the same value.
+- Change the `Version` header in `plugin/twee-cache.php` and in the three drop-ins in `plugin/handlers/` to the same value.
 - Describe the release in `CHANGELOG.md` under a `## {version}` heading.
 - Commit and push.
 - Run `composer release` to build the ZIP and publish release `v{version}`. The section of the version in `CHANGELOG.md` becomes the release notes.
-- Run `composer zip` to build `build/twee-object-cache-{version}.zip` only.
+- Run `composer zip` to build `build/twee-cache-{version}.zip` only.
 
 The release script needs the [GitHub CLI](https://cli.github.com), signed in with `gh auth login`. It stops when the versions are different, `CHANGELOG.md` has no section for the version, there are uncommitted changes, `HEAD` is not pushed, or the release exists.
 
@@ -142,7 +165,7 @@ The release script needs the [GitHub CLI](https://cli.github.com), signed in wit
 Link the `plugin/` folder into a site instead of copying it. On Windows, run this in an admin prompt or with Developer Mode on:
 
 ```bash
-cmd /c mklink /D "D:\Server\domains\work\site\wp-content\plugins\twee-object-cache" "D:\Work\wp-content\plugins\twee-object-cache\plugin"
+cmd /c mklink /D "D:\Server\domains\work\site\wp-content\plugins\twee-cache" "D:\Work\wp-content\plugins\twee-cache\plugin"
 ```
 
 WordPress never offers an update for a linked plugin folder, so an update cannot replace the working copy. The drop-in in `wp-content` is a copy, so select **Disable Cache** and enable the backend again after you change a drop-in.

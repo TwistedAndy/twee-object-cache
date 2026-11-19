@@ -1,6 +1,6 @@
 <?php
 /**
- * PHPUnit bootstrap for the Twee Object Cache drop-ins.
+ * PHPUnit bootstrap for the Twee Cache drop-ins.
  *
  * The object cache drop-ins implement the wp_cache_* surface and rely on only
  * a small handful of WordPress helper functions. We define lightweight stubs
@@ -168,7 +168,7 @@ if (!defined('ABSPATH')) {
  * skip themselves.
  * -------------------------------------------------------------------------
  */
-$dropin = dirname(__DIR__) . '/plugin/' . $engine . '/object-cache.php';
+$dropin = dirname(__DIR__) . '/plugin/handlers/' . $engine . '.php';
 
 require_once $dropin;
 
