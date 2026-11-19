@@ -17,9 +17,12 @@ if (!defined('ABSPATH')) {
 
 require __DIR__ . '/includes/admin.php';
 require __DIR__ . '/includes/dropin.php';
+require __DIR__ . '/includes/settings.php';
 require __DIR__ . '/includes/update.php';
 
 add_action('plugins_loaded', 'toc_dropin_monitor');
+add_action('admin_menu', 'toc_settings_menu');
+add_action('network_admin_menu', 'toc_settings_menu');
 add_action('init', 'toc_admin_action');
 add_action('admin_bar_menu', 'toc_admin_bar', 100);
 add_action('upgrader_process_complete', 'toc_update_dropin', 10, 2);

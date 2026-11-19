@@ -190,7 +190,7 @@ class WP_Object_Cache
 	public int $cache_loads = 0;
 
 	/**
-	 * Log the backend calls for Query Monitor. WP_DEBUG_LOG turns it on. The plugin turns it off when Query Monitor is not active.
+	 * Log the backend calls for Query Monitor. The Tracing setting turns it on. The plugin turns it off when Query Monitor is not active.
 	 */
 	public bool $debug = false;
 
@@ -241,10 +241,16 @@ class WP_Object_Cache
 
 	public function __construct()
 	{
-		$this->debug = (defined('WP_DEBUG_LOG') and WP_DEBUG_LOG);
+		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting.
+		$config = is_file(__DIR__ . '/oc-config.php') ? (array) include __DIR__ . '/oc-config.php' : [];
+		$setting = fn(string $name, mixed $default = null): mixed => defined($name) ? constant($name) : ($config[$name] ?? $default);
 
-		if (defined('WP_MEMCACHED_PERSISTENT_GROUPS')) {
-			$groups = is_string(WP_MEMCACHED_PERSISTENT_GROUPS) ? explode(',', WP_MEMCACHED_PERSISTENT_GROUPS) : WP_MEMCACHED_PERSISTENT_GROUPS;
+		$this->debug = !empty($config['trace']);
+
+		$groups = $setting('WP_MEMCACHED_PERSISTENT_GROUPS');
+
+		if ($groups !== null and $groups !== '') {
+			$groups = is_string($groups) ? explode(',', $groups) : $groups;
 
 			if (is_array($groups)) {
 				$this->persistent_groups = [];
@@ -261,9 +267,9 @@ class WP_Object_Cache
 		}
 
 		// The host name changes between web, WP-CLI and multisite requests, so the default salt uses the database
-		if (defined('WP_CACHE_KEY_SALT')) {
-			$this->key_salt = WP_CACHE_KEY_SALT;
-		} else {
+		$this->key_salt = (string) $setting('WP_CACHE_KEY_SALT', '');
+
+		if ($this->key_salt === '') {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
 		}
 
@@ -274,33 +280,34 @@ class WP_Object_Cache
 
 		global $memcached_servers;
 
-		if (empty($memcached_servers) or !is_array($memcached_servers)) {
+		// The $memcached_servers global of wp-config.php wins over the setting
+		if (!empty($memcached_servers) and is_array($memcached_servers)) {
+			$servers = $memcached_servers;
+		} elseif (!empty($config['memcached_servers']) and is_array($config['memcached_servers'])) {
+			$servers = $config['memcached_servers'];
+		} else {
 			$servers = [
 				['127.0.0.1', 11211],
 			];
-		} else {
-			$servers = $memcached_servers;
 		}
 
-		if (defined('WP_MEMCACHED_CONNECT_TIMEOUT') and WP_MEMCACHED_CONNECT_TIMEOUT > 0) {
-			$connect_timeout = (int) WP_MEMCACHED_CONNECT_TIMEOUT;
-		} else {
+		$connect_timeout = (int) $setting('WP_MEMCACHED_CONNECT_TIMEOUT', 250);
+		$send_timeout = (int) $setting('WP_MEMCACHED_SEND_TIMEOUT', 250);
+		$recv_timeout = (int) $setting('WP_MEMCACHED_RECV_TIMEOUT', 250);
+
+		if ($connect_timeout <= 0) {
 			$connect_timeout = 250;
 		}
 
-		if (defined('WP_MEMCACHED_SEND_TIMEOUT') and WP_MEMCACHED_SEND_TIMEOUT >= 0) {
-			$send_timeout = (int) WP_MEMCACHED_SEND_TIMEOUT;
-		} else {
+		if ($send_timeout < 0) {
 			$send_timeout = 250;
 		}
 
-		if (defined('WP_MEMCACHED_RECV_TIMEOUT') and WP_MEMCACHED_RECV_TIMEOUT >= 0) {
-			$recv_timeout = (int) WP_MEMCACHED_RECV_TIMEOUT;
-		} else {
+		if ($recv_timeout < 0) {
 			$recv_timeout = 250;
 		}
 
-		if (defined('WP_MEMCACHED_IGBINARY') and WP_MEMCACHED_IGBINARY and defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
+		if ($setting('WP_MEMCACHED_IGBINARY', false) and defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
 			$this->serializer = 'igbinary_serialize';
 			$this->unserializer = 'igbinary_unserialize';
 			$serializer = Memcached::SERIALIZER_IGBINARY;
@@ -365,7 +372,7 @@ class WP_Object_Cache
 		}
 
 		// Flush stale cache if the server was previously offline
-		$flag_file = __DIR__ . '/.ocflush';
+		$flag_file = __DIR__ . '/oc-flush';
 
 		if ($this->active) {
 			if (file_exists($flag_file) and $this->flush()) {
@@ -1176,8 +1183,8 @@ class WP_Object_Cache
 		if (!$active) {
 			$this->active = false;
 
-			if (!file_exists(__DIR__ . '/.ocflush')) {
-				@touch(__DIR__ . '/.ocflush');
+			if (!file_exists(__DIR__ . '/oc-flush')) {
+				@touch(__DIR__ . '/oc-flush');
 			}
 		}
 

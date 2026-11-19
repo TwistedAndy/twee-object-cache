@@ -39,8 +39,10 @@ function toc_admin_action(): void
 			wp_die('An object cache is already installed. Disable it first.', 'Object Cache', ['back_link' => true]);
 		}
 
-		if (!toc_dropin_is_reachable($engine)) {
-			wp_die('The selected cache engine is not reachable. Check the configuration.', 'Object Cache', ['back_link' => true]);
+		$test = toc_dropin_test($engine, toc_settings_get());
+
+		if (!$test['ok']) {
+			wp_die(esc_html($test['message']) . ' Check the settings on the Cache Settings page.', 'Object Cache', ['back_link' => true]);
 		}
 
 		if (!toc_dropin_install($engine)) {
@@ -80,6 +82,13 @@ function toc_admin_bar(WP_Admin_Bar $admin_bar): void
 		'id'    => 'twee-cache',
 		'title' => 'Object Cache',
 		'href'  => '#',
+	]);
+
+	$admin_bar->add_node([
+		'id'     => 'twee-cache-settings',
+		'parent' => 'twee-cache',
+		'title'  => 'Settings',
+		'href'   => toc_settings_url(),
 	]);
 
 	$engine = toc_dropin_engine();

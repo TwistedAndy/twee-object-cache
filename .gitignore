@@ -6,3 +6,4 @@ tests/build/
 .DS_Store
 composer.lock
 phpunit.xml.dist
+node_modules/

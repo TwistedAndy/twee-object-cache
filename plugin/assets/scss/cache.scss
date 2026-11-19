@@ -1,0 +1,202 @@
+.cache_box {
+	max-width: 960px;
+
+	// The page shows only the section of the selected handler
+	@each $handler in redis, memcached, apcu {
+		&:has(#toc-handler option[value="#{$handler}"]:checked) {
+			.section[data-handler="#{$handler}"] {
+				display: block;
+			}
+		}
+	}
+
+	.sections {
+		display: flex;
+		flex-direction: column;
+		margin: 16px 0;
+		gap: 16px;
+	}
+
+	.section {
+		padding: 16px 20px 20px;
+		border: 1px solid #c3c4c7;
+		border-radius: 6px;
+		background: #fff;
+
+		&[data-handler] {
+			display: none;
+		}
+	}
+
+	.contents {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		padding-bottom: 12px;
+		margin-bottom: 16px;
+		border-bottom: 1px solid #e0e0e0;
+		gap: 10px;
+
+		h2 {
+			margin: 0;
+			font-size: 16px;
+			font-weight: 600;
+		}
+
+		&_split {
+			.buttons {
+				margin-left: auto;
+			}
+		}
+	}
+
+	.caption {
+		padding: 2px 8px;
+		border-radius: 4px;
+		background: #f0f0f1;
+		color: #50575e;
+		font-size: 0.75rem;
+		font-weight: 600;
+
+		&_success {
+			background: #e7f5ea;
+			color: #1e7e34;
+		}
+
+		&_error {
+			background: #fcf0f1;
+			color: #d63638;
+		}
+	}
+
+	.items {
+		--columns-count: 3;
+
+		display: grid;
+		grid-template-columns: repeat(var(--columns-count), minmax(0, 1fr));
+		grid-auto-flow: dense;
+		gap: 16px 20px;
+
+		@media (max-width: 782px) {
+			--columns-count: 1;
+		}
+	}
+
+	.item {
+		&_wide {
+			grid-column: span 2;
+
+			@media (max-width: 782px) {
+				grid-column: auto;
+			}
+		}
+
+		.label {
+			display: block;
+			margin-bottom: 4px;
+			font-weight: 600;
+		}
+	}
+
+	.field {
+		input,
+		select,
+		textarea {
+			width: 100%;
+			max-width: none;
+		}
+
+		textarea {
+			min-height: 64px;
+		}
+	}
+
+	.text {
+		display: block;
+		margin-top: 4px;
+		color: #646970;
+		font-size: 12px;
+		line-height: 1.5;
+	}
+
+	.options {
+		--columns-count: 2;
+
+		display: grid;
+		grid-template-columns: repeat(var(--columns-count), minmax(0, 1fr));
+		padding-top: 16px;
+		margin-top: 16px;
+		border-top: 1px solid #f0f0f1;
+		gap: 12px 20px;
+
+		@media (max-width: 782px) {
+			--columns-count: 1;
+		}
+	}
+
+	.option {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		cursor: pointer;
+
+		.label {
+			font-weight: 600;
+		}
+
+		// A switch replaces the checkbox of WordPress
+		input[type="checkbox"] {
+			position: relative;
+			flex: none;
+			width: 32px;
+			height: 18px;
+			padding: 0;
+			margin: 1px 0 0;
+			border: none;
+			border-radius: 9px;
+			background: #c3c4c7;
+			box-shadow: none;
+			transition: background-color 0.2s ease;
+			cursor: pointer;
+			appearance: none;
+
+			&::before {
+				content: none;
+			}
+
+			&::after {
+				content: '';
+				position: absolute;
+				top: 2px;
+				left: 2px;
+				width: 14px;
+				height: 14px;
+				border-radius: 50%;
+				background: #fff;
+				transition: transform 0.2s ease;
+			}
+
+			&:checked {
+				background: var(--wp-admin-theme-color, #2271b1);
+
+				&::after {
+					transform: translateX(14px);
+				}
+			}
+
+			&:focus {
+				box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--wp-admin-theme-color, #2271b1);
+			}
+
+			&:disabled {
+				opacity: 0.6;
+				cursor: not-allowed;
+			}
+		}
+	}
+
+	.buttons {
+		display: flex;
+		gap: 10px;
+	}
+}

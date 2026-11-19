@@ -54,6 +54,11 @@ function toc_dropin_install(string $engine): bool
 		return false;
 	}
 
+	// Version 1.1 and older name the flush marker .ocflush
+	if (is_file(WP_CONTENT_DIR . '/.ocflush')) {
+		@rename(WP_CONTENT_DIR . '/.ocflush', WP_CONTENT_DIR . '/oc-flush');
+	}
+
 	// OPcache can keep the old drop-in when it does not examine the file time
 	if (function_exists('opcache_invalidate')) {
 		opcache_invalidate($dropin_file, true);
@@ -64,100 +69,107 @@ function toc_dropin_install(string $engine): bool
 
 
 /**
- * Check if the selected cache engine is actually working
+ * Test the backend of an engine with the given settings
  *
- * @param string $ext
+ * The test connects, then writes, reads and deletes a test key. It does not change the installed drop-in.
  *
- * @return bool
+ * @param string $engine   redis, memcached or apcu
+ * @param array  $settings The settings from toc_settings_get()
+ *
+ * @return array The result (ok) and a message for the user (message)
  */
-function toc_dropin_is_reachable(string $ext): bool
+function toc_dropin_test(string $engine, array $settings): array
 {
-	if ($ext === 'apcu') {
-		return (function_exists('apcu_enabled') and apcu_enabled());
-	}
+	$key = 'toc_test_' . uniqid();
 
-	if ($ext === 'memcached') {
-		if (!class_exists('Memcached')) {
-			return false;
-		}
+	try {
+		if ($engine === 'redis') {
+			if (!class_exists('Redis')) {
+				return ['ok' => false, 'message' => 'The redis PHP extension is not loaded.'];
+			}
 
-		$memcached = new Memcached();
-		$connect_timeout = defined('WP_MEMCACHED_CONNECT_TIMEOUT') ? (int) WP_MEMCACHED_CONNECT_TIMEOUT : 250;
-		$send_timeout = defined('WP_MEMCACHED_SEND_TIMEOUT') ? (int) WP_MEMCACHED_SEND_TIMEOUT : 250;
-		$recv_timeout = defined('WP_MEMCACHED_RECV_TIMEOUT') ? (int) WP_MEMCACHED_RECV_TIMEOUT : 250;
+			$host = (string) $settings['WP_REDIS_HOST'];
+			$port = (str_starts_with($host, 'unix://') or str_starts_with($host, '/')) ? 0 : (int) $settings['WP_REDIS_PORT'];
+			$password = $settings['WP_REDIS_PASSWORD'];
+			$database = (int) $settings['WP_REDIS_DATABASE'];
+			$redis = new Redis();
 
-		$connect_timeout = $connect_timeout > 0 ? $connect_timeout : 250;
-		$send_timeout = $send_timeout > 0 ? $send_timeout : 250;
-		$recv_timeout = $recv_timeout > 0 ? $recv_timeout : 250;
+			if (!$redis->connect($host, $port, (float) $settings['WP_REDIS_TIMEOUT'])) {
+				return ['ok' => false, 'message' => 'Cannot connect to Redis at ' . $host . ($port ? ':' . $port : '') . '.'];
+			}
 
-		$memcached->setOption(Memcached::OPT_NO_BLOCK, false);
-		$memcached->setOption(Memcached::OPT_NOREPLY, false);
-		$memcached->setOption(Memcached::OPT_CONNECT_TIMEOUT, $connect_timeout);
-		$memcached->setOption(Memcached::OPT_SEND_TIMEOUT, $send_timeout * 1000);
-		$memcached->setOption(Memcached::OPT_RECV_TIMEOUT, $recv_timeout * 1000);
+			if ($password !== '' and !$redis->auth($password)) {
+				return ['ok' => false, 'message' => 'Redis does not accept the password: ' . $redis->getLastError()];
+			}
 
-		global $memcached_servers;
+			if ($database > 0 and !$redis->select($database)) {
+				return ['ok' => false, 'message' => 'Redis cannot select database ' . $database . ': ' . $redis->getLastError()];
+			}
 
-		if (!empty($memcached_servers)) {
-			$memcached->addServers($memcached_servers);
+			$start = hrtime(true);
+			$redis->ping();
+			$latency = hrtime(true) - $start;
+
+			$works = ($redis->set($key, 'ok', 60) and $redis->get($key) === 'ok' and $redis->del($key) === 1);
+			$version = $redis->info('server')['redis_version'] ?? '';
+
+			$redis->close();
+		} elseif ($engine === 'memcached') {
+			if (!class_exists('Memcached')) {
+				return ['ok' => false, 'message' => 'The memcached PHP extension is not loaded.'];
+			}
+
+			$memcached = new Memcached();
+
+			$memcached->setOption(Memcached::OPT_NO_BLOCK, false);
+			$memcached->setOption(Memcached::OPT_NOREPLY, false);
+			$memcached->setOption(Memcached::OPT_CONNECT_TIMEOUT, max(1, (int) $settings['WP_MEMCACHED_CONNECT_TIMEOUT']));
+			$memcached->setOption(Memcached::OPT_SEND_TIMEOUT, max(0, (int) $settings['WP_MEMCACHED_SEND_TIMEOUT']) * 1000);
+			$memcached->setOption(Memcached::OPT_RECV_TIMEOUT, max(0, (int) $settings['WP_MEMCACHED_RECV_TIMEOUT']) * 1000);
+			$memcached->addServers($settings['memcached_servers']);
+
+			$start = hrtime(true);
+			$versions = array_filter((array) $memcached->getVersion(), fn($version) => $version and $version !== '255.255.255');
+			$latency = hrtime(true) - $start;
+
+			if (!$versions) {
+				return ['ok' => false, 'message' => 'Cannot connect to Memcached: ' . $memcached->getResultMessage()];
+			}
+
+			$works = ($memcached->set($key, 'ok', 60) and $memcached->get($key) === 'ok' and $memcached->delete($key));
+			$version = implode(', ', array_unique($versions));
+
+			if (!$works) {
+				return ['ok' => false, 'message' => 'Memcached does not save the test value: ' . $memcached->getResultMessage()];
+			}
+		} elseif ($engine === 'apcu') {
+			if (!function_exists('apcu_enabled') or !apcu_enabled()) {
+				return ['ok' => false, 'message' => 'APCu is not enabled for the web server. Set apc.enabled to 1.'];
+			}
+
+			$start = hrtime(true);
+			$works = (apcu_store($key, 'ok', 60) and apcu_fetch($key) === 'ok' and apcu_delete($key));
+			$latency = hrtime(true) - $start;
+			$version = phpversion('apcu');
 		} else {
-			$memcached->addServer('127.0.0.1', 11211);
+			return ['ok' => false, 'message' => 'Select Redis, Memcached or APCu.'];
 		}
-
-		$stats = $memcached->getStats();
-
-		if (empty($stats)) {
-			return false;
-		}
-
-		foreach ($stats as $data) {
-			if (isset($data['pid']) and $data['pid'] > 0) {
-				return true;
-			}
-		}
-
-		return false;
+	} catch (Throwable $e) {
+		return ['ok' => false, 'message' => $e->getMessage()];
 	}
 
-	if ($ext === 'redis') {
-		if (!class_exists('Redis')) {
-			return false;
-		}
-
-		$redis = new Redis();
-		$host = defined('WP_REDIS_HOST') ? WP_REDIS_HOST : '127.0.0.1';
-		$port = defined('WP_REDIS_PORT') ? WP_REDIS_PORT : 6379;
-		$timeout = defined('WP_REDIS_TIMEOUT') ? WP_REDIS_TIMEOUT : 1;
-
-		try {
-			if (strpos($host, 'unix://') === 0 or strpos($host, '/') === 0) {
-				$connected = $redis->connect($host, 0, $timeout);
-			} else {
-				$connected = $redis->connect($host, (int) $port, $timeout);
-			}
-
-			if (!$connected) {
-				return false;
-			}
-
-			if (defined('WP_REDIS_PASSWORD') and !$redis->auth(WP_REDIS_PASSWORD)) {
-				return false;
-			}
-
-			return true;
-		} catch (Exception $e) {
-			return false;
-		}
+	if (!$works) {
+		return ['ok' => false, 'message' => 'The backend does not save the test value.'];
 	}
 
-	return false;
+	return ['ok' => true, 'message' => 'The test value was written, read and deleted. Version: ' . $version . '. Latency: ' . number_format($latency / 1e3) . ' µs.'];
 }
 
 
 /**
  * Add the Object Cache panels to Query Monitor
  *
- * Without Query Monitor, the drop-in stops the log of the backend calls that WP_DEBUG_LOG started.
+ * Without Query Monitor, the drop-in stops the log of the backend calls that the Tracing setting started.
  */
 function toc_dropin_monitor(): void
 {

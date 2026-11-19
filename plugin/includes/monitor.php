@@ -128,7 +128,7 @@ class Twee_Cache_QM_Output extends QM_Output_Html
 			echo esc_html(number_format($data['time'], 2)) . ' ms<br>';
 			echo '<span class="qm-info">' . esc_html(number_format($data['time_ratio'], 1)) . '% of the request</span>';
 		} else {
-			echo 'Set <code>WP_DEBUG_LOG</code> to <code>true</code> in <code>wp-config.php</code> to log the backend calls, their time and their callers.';
+			echo 'Turn on Tracing on the <a href="' . esc_url(toc_settings_url()) . '">Cache Settings</a> page to log the backend calls, their time and their callers.';
 		}
 
 		echo '</p></section>';
@@ -205,7 +205,7 @@ class Twee_Cache_QM_Commands_Output extends QM_Output_Html
 
 		if (!$data['debug']) {
 			$this->before_non_tabular_output('twee-cache-commands', 'Commands');
-			echo $this->build_notice('Set <code>WP_DEBUG_LOG</code> to <code>true</code> in <code>wp-config.php</code> to log the backend calls of the object cache.');
+			echo $this->build_notice('Turn on Tracing on the <a href="' . esc_url(toc_settings_url()) . '">Cache Settings</a> page to log the backend calls of the object cache.');
 			$this->after_non_tabular_output();
 
 			return;

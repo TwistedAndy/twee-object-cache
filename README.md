@@ -16,6 +16,7 @@ Twee Cache can be installed as a standard WordPress plugin or as a manual drop-i
 - As an administrator, open the **Object Cache** menu in the WordPress Admin Bar. When no drop-in is installed, it lists the backends whose PHP extensions are loaded.
 - Select **Enable Redis**, **Enable Memcached**, or **Enable APCu**. The plugin examines if the backend is available, copies the selected drop-in to `wp-content/object-cache.php`, and flushes the cache. Disable the current drop-in before you select another backend.
 - Select **Disable Cache** to remove the drop-in. When you deactivate the plugin, it also removes the drop-in.
+- Select **Settings** to open **Settings → Cache Settings**. On multisite, the page is in **Network Admin → Settings**. See [Configuration](#configuration).
 - When a drop-in is installed, the menu also shows the engine, the hit ratio with the hits and misses, and the backend reads of the page. It also shows the memory and the number of keys of the backend, and the latency of one request to it. The menu sends one or two requests to the backend to get these values. In wp-admin, the Admin Bar shows before most of the page, so the page values are not complete.
 - When another plugin installed `wp-content/object-cache.php`, the menu shows **Another object cache is installed**, and the plugin does not change or remove that file.
 - On multisite, only users with the `manage_network_options` capability see the menu, because the drop-in is shared by all sites of the network.
@@ -66,9 +67,9 @@ New releases show up in **Dashboard → Updates**. After an update, the plugin r
 
 - Recognized Memcached operation errors disable backend access for the remainder of the request while leaving the runtime cache available. Selected APCu failures do the same when they indicate APCu has become disabled.
 - When a Redis command fails and Redis does not reply to `PING`, the drop-in stops using Redis for the remainder of the request.
-- When a Redis write or delete fails, the old value stays in Redis. The drop-in then stops using Redis for the remainder of the request and creates the `.ocflush` marker.
+- When a Redis write or delete fails, the old value stays in Redis. The drop-in then stops using Redis for the remainder of the request and creates the `oc-flush` marker.
 - Backend initialization failures create WordPress admin notices. Runtime Redis errors use `E_USER_NOTICE`; Memcached and selected APCu errors use `E_USER_WARNING`. Display and logging follow the site's PHP and WordPress error configuration.
-- On detected Redis or Memcached failures, the drop-in attempts to create an internal `.ocflush` marker. On a later successful initialization, Redis deletes all keys with the key salt and Memcached changes the site version before the marker is removed. This best-effort recovery requires the deployed drop-in directory to be writable.
+- On detected Redis or Memcached failures, the drop-in attempts to create an internal `oc-flush` marker. On a later successful initialization, Redis deletes all keys with the key salt and Memcached changes the site version before the marker is removed. This best-effort recovery requires the deployed drop-in directory to be writable.
 
 ## Query Monitor
 
@@ -80,9 +81,9 @@ When [Query Monitor](https://wordpress.org/plugins/query-monitor/) is active, th
 - The errors of the request.
 - The groups in the runtime cache, with their type and number of entries.
 
-Set `WP_DEBUG_LOG` to `true` in `wp-config.php` to log each backend call. Then the panel also shows the number of backend calls, their total time, and their share of the request time. The **Commands** panel under it lists each call with its key, caller, component and time. You can filter the list by command and by component.
+Turn on **Tracing** on the **Cache Settings** page to log each backend call. Then the panel also shows the number of backend calls, their total time, and their share of the request time. The **Commands** panel under it lists each call with its key, caller, component and time. You can filter the list by command and by component.
 
-- When `WP_DEBUG_LOG` is `false`, the panels show a message about it.
+- When tracing is off, the panels show a message about it.
 - The log stops at `plugins_loaded` when Query Monitor is not active.
 - Without the log, each backend call adds two boolean checks. Runtime cache hits do not change.
 - The log records a backtrace for each backend call, so use it only on development sites.
@@ -91,7 +92,15 @@ Set `WP_DEBUG_LOG` to `true` in `wp-config.php` to log each backend call. Then t
 
 ## Configuration
 
-Configuration values are optional when the built-in local defaults suit the environment. Define constants in `wp-config.php` before WordPress loads the object-cache drop-in.
+Configuration values are optional when the built-in local defaults suit the environment. Set them on the **Cache Settings** page, or define constants in `wp-config.php` before WordPress loads the object-cache drop-in.
+
+- The page writes the settings to `wp-content/oc-config.php`, a PHP file that returns an array. The drop-in reads it once on each request. OPcache keeps it in memory.
+- A constant in `wp-config.php` wins over the value on the page. The page shows the field as read-only.
+- **Test** connects to the backend with the values of the form, then writes, reads and deletes a test key. It does not save the values.
+- When the cache is on, **Save Changes** tests the new values first and saves them only when the test passes. When you select another handler, it replaces the drop-in and flushes the cache.
+- **Turn On** tests the saved values, installs the drop-in of the selected handler and flushes the cache. **Turn Off** removes the drop-in.
+- **Tracing** logs the backend calls for the Query Monitor panel. See [Query Monitor](#query-monitor).
+- On a site with more than one web server, the page changes the files only on the server that handles the request. Use constants on these sites.
 
 ### All backends
 
@@ -134,6 +143,7 @@ Configuration values are optional when the built-in local defaults suit the envi
 │       ├── admin.php          Admin Bar menu and its actions
 │       ├── dropin.php         Drop-in install, engine detection, Query Monitor connection
 │       ├── monitor.php        Query Monitor panels
+│       ├── settings.php       Cache Settings page, oc-config.php
 │       └── update.php         Updates from GitHub, drop-in replacement after an update
 ├── tests/                     PHPUnit integration tests
 ├── bin/release.php            Builds and publishes releases

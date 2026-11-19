@@ -1,0 +1,13 @@
+{
+	"name": "twee-cache-assets",
+	"version": "1.0.0",
+	"description": "Asset compiler for Twee Cache plugin",
+	"scripts": {
+		"build": "gulp css"
+	},
+	"devDependencies": {
+		"gulp": "^4.0.2",
+		"gulp-sass": "^5.1.0",
+		"sass": "^1.69.0"
+	}
+}

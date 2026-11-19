@@ -190,7 +190,7 @@ class WP_Object_Cache {
 	public int $cache_loads = 0;
 
 	/**
-	 * Log the backend calls for Query Monitor. WP_DEBUG_LOG turns it on. The plugin turns it off when Query Monitor is not active.
+	 * Log the backend calls for Query Monitor. The Tracing setting turns it on. The plugin turns it off when Query Monitor is not active.
 	 */
 	public bool $debug = false;
 
@@ -228,10 +228,16 @@ class WP_Object_Cache {
 
 	public function __construct()
 	{
-		$this->debug = (defined('WP_DEBUG_LOG') and WP_DEBUG_LOG);
+		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting.
+		$config = is_file(__DIR__ . '/oc-config.php') ? (array) include __DIR__ . '/oc-config.php' : [];
+		$setting = fn(string $name, mixed $default = null): mixed => defined($name) ? constant($name) : ($config[$name] ?? $default);
 
-		if (defined('WP_APCU_PERSISTENT_GROUPS')) {
-			$groups = is_string(WP_APCU_PERSISTENT_GROUPS) ? explode(',', WP_APCU_PERSISTENT_GROUPS) : WP_APCU_PERSISTENT_GROUPS;
+		$this->debug = !empty($config['trace']);
+
+		$groups = $setting('WP_APCU_PERSISTENT_GROUPS');
+
+		if ($groups !== null and $groups !== '') {
+			$groups = is_string($groups) ? explode(',', $groups) : $groups;
 
 			if (is_array($groups)) {
 				$this->persistent_groups = [];
@@ -248,9 +254,9 @@ class WP_Object_Cache {
 		}
 
 		// The host name changes between multisite hosts, so the default salt uses the database
-		if (defined('WP_CACHE_KEY_SALT')) {
-			$this->key_salt = WP_CACHE_KEY_SALT;
-		} else {
+		$this->key_salt = (string) $setting('WP_CACHE_KEY_SALT', '');
+
+		if ($this->key_salt === '') {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
 		}
 
@@ -794,7 +800,7 @@ class WP_Object_Cache {
 		$this->errors[] = $message;
 		$this->active = false;
 
-		$flag_file = __DIR__ . '/.ocflush';
+		$flag_file = __DIR__ . '/oc-flush';
 
 		if (!file_exists($flag_file)) {
 			@touch($flag_file);
