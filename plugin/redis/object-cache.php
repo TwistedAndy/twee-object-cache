@@ -179,7 +179,8 @@ function wp_cache_reset()
  * Core WP_Object_Cache class
  */
 #[AllowDynamicProperties]
-class WP_Object_Cache {
+class WP_Object_Cache
+{
 
 	public int $cache_hits = 0;
 
@@ -213,6 +214,11 @@ class WP_Object_Cache {
 
 	private bool $active = true;
 
+	/**
+	 * Set hash field TTLs with HEXPIREAT. The first command that fails sets it to false.
+	 */
+	private bool $field_expiry = false;
+
 	private Redis|Relay\Relay $redis;
 
 	public function __construct()
@@ -234,15 +240,11 @@ class WP_Object_Cache {
 			$this->blog_prefix = get_current_blog_id() . ':';
 		}
 
+		// The host name changes between web, WP-CLI and multisite requests, so the default salt uses the database
 		if (defined('WP_CACHE_KEY_SALT')) {
 			$this->key_salt = WP_CACHE_KEY_SALT;
 		} else {
-			$host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
-			$this->key_salt = preg_replace('/[^a-zA-Z0-9]/', '_', $host);
-		}
-
-		if (strlen($this->key_salt) > 10) {
-			$this->key_salt = substr($this->key_salt, 0, 10);
+			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
 		}
 
 		if (defined('WP_REDIS_USE_RELAY') and WP_REDIS_USE_RELAY and class_exists('Relay\Relay')) {
@@ -251,11 +253,15 @@ class WP_Object_Cache {
 			$this->redis = new Redis();
 		}
 
+		$this->field_expiry = method_exists($this->redis, 'hExpireAt');
+
 		$host = defined('WP_REDIS_HOST') ? WP_REDIS_HOST : '127.0.0.1';
 		$port = defined('WP_REDIS_PORT') ? WP_REDIS_PORT : 6379;
 
 		$timeout = defined('WP_REDIS_TIMEOUT') ? WP_REDIS_TIMEOUT : 1;
 		$retry_interval = defined('WP_REDIS_RETRY_INTERVAL') ? WP_REDIS_RETRY_INTERVAL : 100;
+
+		$database = defined('WP_REDIS_DATABASE') ? (int) WP_REDIS_DATABASE : 0;
 
 		try {
 
@@ -264,17 +270,27 @@ class WP_Object_Cache {
 			}
 
 			if (!defined('WP_REDIS_PERSISTENT_CONNECT') or WP_REDIS_PERSISTENT_CONNECT) {
-				$this->redis->pconnect($host, $port, $timeout, null, $retry_interval);
+				/*
+				 * A persistent connection keeps its database and its login between requests.
+				 * Each database and password gets a separate connection, so that a site cannot use the state of other sites.
+				 */
+				$persistent_id = 'twee_' . $database;
+
+				if (defined('WP_REDIS_PASSWORD')) {
+					$persistent_id .= '_' . md5(serialize(WP_REDIS_PASSWORD));
+				}
+
+				$this->redis->pconnect($host, $port, $timeout, $persistent_id, $retry_interval, $timeout);
 			} else {
-				$this->redis->connect($host, $port, $timeout, null, $retry_interval);
+				$this->redis->connect($host, $port, $timeout, null, $retry_interval, $timeout);
 			}
 
-			if (defined('WP_REDIS_PASSWORD')) {
-				$this->redis->auth(WP_REDIS_PASSWORD);
+			if (defined('WP_REDIS_PASSWORD') and !$this->redis->auth(WP_REDIS_PASSWORD)) {
+				throw new Exception('Authentication failed: ' . $this->redis->getLastError());
 			}
 
-			if (defined('WP_REDIS_DATABASE')) {
-				$this->redis->select((int) WP_REDIS_DATABASE);
+			if ($database > 0 and !$this->redis->select($database)) {
+				throw new Exception('Cannot select database ' . $database . ': ' . $this->redis->getLastError());
 			}
 
 			if ((!defined('WP_REDIS_IGBINARY') or WP_REDIS_IGBINARY) and defined('Redis::SERIALIZER_IGBINARY') and extension_loaded('igbinary')) {
@@ -296,8 +312,7 @@ class WP_Object_Cache {
 			// Flush stale cache if the server was previously offline
 			$flag_file = __DIR__ . '/.ocflush';
 
-			if (file_exists($flag_file)) {
-				$this->redis->flushDb();
+			if (file_exists($flag_file) and $this->flush()) {
 				@unlink($flag_file);
 			}
 		} catch (Exception $e) {
@@ -325,9 +340,15 @@ class WP_Object_Cache {
 		}
 	}
 
-	public function get(int|string $key, string $group = 'default', bool|null $force = false, &$found = null): mixed
+	public function get(int|string|null $key, ?string $group = 'default', bool|null $force = false, &$found = null): mixed
 	{
-		if ($group === '') {
+		$found = false;
+
+		if ($key === null) {
+			return false;
+		}
+
+		if ($group === null or $group === '') {
 			$group = 'default';
 		}
 
@@ -341,7 +362,6 @@ class WP_Object_Cache {
 
 		// If it's a non-persistent group and wasn't in runtime, it's a miss
 		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
-			$found = false;
 			$this->cache_misses++;
 
 			return false;
@@ -359,13 +379,15 @@ class WP_Object_Cache {
 		$this->cache_loads++;
 
 		try {
-			$value = $this->redis->hGet($this->build_group($group), $key);
+			$group_key = $this->build_group($group);
+			$value = $this->redis->hGet($group_key, $key);
 
 			if ($value !== false) {
 				// Values with TTL and boolean falses are stored as an array
 				if (is_array($value) and array_key_exists('_d', $value)) {
-					if (isset($value['_t']) and time() > (int) $value['_t']) {
-						$found = false;
+					if ($this->is_expired($value, time())) {
+						// Redis before 7.4 cannot expire a hash field, so delete it here
+						$this->redis->hDel($group_key, $key);
 						$this->cache_misses++;
 
 						return false;
@@ -384,15 +406,14 @@ class WP_Object_Cache {
 			$this->handle_error($e);
 		}
 
-		$found = false;
 		$this->cache_misses++;
 
 		return false;
 	}
 
-	public function get_multiple(array $keys, string $group = 'default', bool $force = false): array
+	public function get_multiple(array $keys, ?string $group = 'default', bool $force = false): array
 	{
-		if ($group === '') {
+		if ($group === null or $group === '') {
 			$group = 'default';
 		}
 
@@ -405,6 +426,10 @@ class WP_Object_Cache {
 
 		// Resolve runtime cache and identify keys missing from memory
 		foreach ($keys as $key) {
+			if ($key === null) {
+				continue;
+			}
+
 			if (!$force and array_key_exists($key, $runtime_cache)) {
 				$this->cache_hits++;
 				$values[$key] = $this->cache[$group][$key];
@@ -433,6 +458,8 @@ class WP_Object_Cache {
 		$this->cache_loads++;
 
 		if (is_array($cached_values)) {
+			$expired = [];
+
 			foreach ($key_map as $key) {
 				$cached_value = $cached_values[$key] ?? false;
 
@@ -443,7 +470,8 @@ class WP_Object_Cache {
 				}
 
 				if (is_array($cached_value) and array_key_exists('_d', $cached_value)) {
-					if (isset($cached_value['_t']) and $time > (int) $cached_value['_t']) {
+					if ($this->is_expired($cached_value, $time)) {
+						$expired[] = $key;
 						$this->cache_misses++;
 						$values[$key] = false;
 						continue;
@@ -456,6 +484,15 @@ class WP_Object_Cache {
 				$this->cache[$group][$key] = $cached_value;
 				$values[$key] = $cached_value;
 			}
+
+			// Redis before 7.4 cannot expire a hash field, so delete it here
+			if ($expired) {
+				try {
+					$this->redis->hDel($group_key, ...$expired);
+				} catch (Exception $e) {
+					$this->handle_error($e);
+				}
+			}
 		} else {
 			foreach ($key_map as $key) {
 				$this->cache_misses++;
@@ -466,9 +503,13 @@ class WP_Object_Cache {
 		return $values;
 	}
 
-	public function set(int|string $key, mixed $data, string $group = 'default', int $expire = 0): bool
+	public function set(int|string|null $key, mixed $data, ?string $group = 'default', int $expire = 0): bool
 	{
-		if ($group === '') {
+		if ($key === null) {
+			return false;
+		}
+
+		if ($group === null or $group === '') {
 			$group = 'default';
 		}
 
@@ -486,32 +527,19 @@ class WP_Object_Cache {
 			return true;
 		}
 
-		if ($expire > 0) {
-			$data = [
-				'_t' => time() + $expire,
-				'_d' => $data,
-			];
-		} elseif ($data === false) {
-			$data = [
-				'_d' => false
-			];
-		}
+		$expire_at = $expire > 0 ? time() + $expire : 0;
 
-		try {
-			$result = $this->redis->hSet($this->build_group($group), $key, $data);
-		} catch (Exception $e) {
-			$this->handle_error($e);
-
-			return false;
-		}
-
-		return $result !== false;
+		return $this->write($this->build_group($group), [$key => $this->pack($data, $expire_at)], $expire_at);
 	}
 
-	public function set_multiple(array $data, string $group = 'default', int $expire = 0): array
+	public function set_multiple(array $data, ?string $group = 'default', int $expire = 0): array
 	{
-		if ($group === '') {
+		if ($group === null or $group === '') {
 			$group = 'default';
+		}
+
+		if ($data === []) {
+			return [];
 		}
 
 		$values = [];
@@ -533,28 +561,14 @@ class WP_Object_Cache {
 			return $values;
 		}
 
+		$expire_at = $expire > 0 ? time() + $expire : 0;
 		$cache_values = [];
 
 		foreach ($data as $key => $value) {
-			if ($expire > 0) {
-				$cache_values[$key] = [
-					'_t' => time() + $expire,
-					'_d' => $value,
-				];
-			} elseif ($value === false) {
-				$cache_values[$key] = ['_d' => false];
-			} else {
-				$cache_values[$key] = $value;
-			}
+			$cache_values[$key] = $this->pack($value, $expire_at);
 		}
 
-		$group_key = $this->build_group($group);
-
-		try {
-			$this->redis->hMSet($group_key, $cache_values);
-		} catch (Exception $e) {
-			$this->handle_error($e);
-
+		if (!$this->write($this->build_group($group), $cache_values, $expire_at)) {
 			foreach ($values as $key => $_) {
 				$values[$key] = false;
 			}
@@ -563,13 +577,13 @@ class WP_Object_Cache {
 		return $values;
 	}
 
-	public function add(int|string $key, mixed $data, string $group = 'default', int $expire = 0): bool
+	public function add(int|string|null $key, mixed $data, ?string $group = 'default', int $expire = 0): bool
 	{
-		if (wp_suspend_cache_addition()) {
+		if ($key === null or wp_suspend_cache_addition()) {
 			return false;
 		}
 
-		if ($group === '') {
+		if ($group === null or $group === '') {
 			$group = 'default';
 		}
 
@@ -588,33 +602,27 @@ class WP_Object_Cache {
 			return true;
 		}
 
-		if ($expire > 0) {
-			$data_to_store = [
-				'_t' => time() + $expire,
-				'_d' => $data,
-			];
-		} elseif ($data === false) {
-			$data_to_store = ['_d' => false];
-		} else {
-			$data_to_store = $data;
-		}
+		$expire_at = $expire > 0 ? time() + $expire : 0;
 
+		$data_to_store = $this->pack($data, $expire_at);
 		$group_key = $this->build_group($group);
-
-		$added = true;
 
 		try {
 			// Use atomic hSetNx for the primary insertion to prevent race conditions
-			if (!$this->redis->hSetNx($group_key, $key, $data_to_store)) {
+			$added = (bool) $this->redis->hSetNx($group_key, $key, $data_to_store);
+
+			if (!$added) {
 				// Key already exists, check if it's expired
 				$existing = $this->redis->hGet($group_key, $key);
 
-				if (is_array($existing) and array_key_exists('_d', $existing) and isset($existing['_t']) and time() > (int) $existing['_t']) {
+				if ($this->is_expired($existing, time())) {
 					// It's expired, so we are allowed to overwrite it
-					$added = $this->redis->hSet($group_key, $key, $data_to_store) !== false;
-				} else {
-					$added = false;
+					$added = ($this->redis->hSet($group_key, $key, $data_to_store) !== false);
 				}
+			}
+
+			if ($added and $expire_at > 0 and $this->field_expiry) {
+				$this->field_expiry = ($this->redis->hExpireAt($group_key, $expire_at, [$key]) !== false);
 			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
@@ -629,7 +637,7 @@ class WP_Object_Cache {
 		return $added;
 	}
 
-	public function add_multiple(array $data, string $group = 'default', int $expire = 0): array
+	public function add_multiple(array $data, ?string $group = 'default', int $expire = 0): array
 	{
 		$values = [];
 
@@ -640,9 +648,13 @@ class WP_Object_Cache {
 		return $values;
 	}
 
-	public function replace(int|string $key, mixed $data, string $group = 'default', int $expire = 0): bool
+	public function replace(int|string|null $key, mixed $data, ?string $group = 'default', int $expire = 0): bool
 	{
-		if ($group === '') {
+		if ($key === null) {
+			return false;
+		}
+
+		if ($group === null or $group === '') {
 			$group = 'default';
 		}
 
@@ -656,48 +668,35 @@ class WP_Object_Cache {
 			return false;
 		}
 
-		if ($is_cached_group) {
-			$group_key = $this->build_group($group);
-			$replaced = false;
+		if (!$is_cached_group) {
+			return $this->set($key, $data, $group, $expire);
+		}
 
-			try {
-				if ($this->redis->hExists($group_key, $key)) {
-					$existing = $this->redis->hGet($group_key, $key);
+		$group_key = $this->build_group($group);
 
-					if (!(is_array($existing) and array_key_exists('_d', $existing) and isset($existing['_t']) and time() > (int) $existing['_t'])) {
-						if ($expire > 0) {
-							$data_to_store = [
-								'_t' => time() + $expire,
-								'_d' => $data,
-							];
-						} elseif ($data === false) {
-							$data_to_store = ['_d' => false];
-						} else {
-							$data_to_store = $data;
-						}
-						$this->redis->hSet($group_key, $key, $data_to_store);
-						$replaced = true;
-					}
-				}
-			} catch (Exception $e) {
-				$this->handle_error($e);
-				$replaced = false;
-			}
+		try {
+			$existing = $this->redis->hGet($group_key, $key);
+		} catch (Exception $e) {
+			$this->handle_error($e);
 
-			if ($replaced) {
-				$this->cache[$group][$key] = $data;
-				$this->cache_sets++;
-			}
+			return false;
+		}
 
-			return $replaced;
+		// Booleans false are stored as an array, so false means that the field does not exist
+		if ($existing === false or $this->is_expired($existing, time())) {
+			return false;
 		}
 
 		return $this->set($key, $data, $group, $expire);
 	}
 
-	public function delete(int|string $key, string $group = 'default'): bool
+	public function delete(int|string|null $key, ?string $group = 'default'): bool
 	{
-		if ($group === '') {
+		if ($key === null) {
+			return false;
+		}
+
+		if ($group === null or $group === '') {
 			$group = 'default';
 		}
 
@@ -712,18 +711,25 @@ class WP_Object_Cache {
 			return $deleted_runtime;
 		}
 
-		try {
-			$deleted = (bool) $this->redis->hDel($this->build_group($group), $key);
-		} catch (Exception $e) {
-			$this->handle_error($e);
+		$error = null;
 
-			return $deleted_runtime;
+		try {
+			$deleted = $this->redis->hDel($this->build_group($group), $key);
+		} catch (Exception $error) {
+			$deleted = false;
 		}
 
-		return ($deleted or $deleted_runtime);
+		if ($deleted === false) {
+			// The old value stays in Redis
+			$this->handle_error($error, true);
+
+			return false;
+		}
+
+		return ($deleted > 0 or $deleted_runtime);
 	}
 
-	public function delete_multiple(array $keys, string $group = 'default'): array
+	public function delete_multiple(array $keys, ?string $group = 'default'): array
 	{
 		$values = [];
 
@@ -734,9 +740,13 @@ class WP_Object_Cache {
 		return $values;
 	}
 
-	public function incr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
+	public function incr(int|string|null $key, int $offset = 1, ?string $group = 'default'): int|bool
 	{
-		if ($group === '') {
+		if ($key === null) {
+			return false;
+		}
+
+		if ($group === null or $group === '') {
 			$group = 'default';
 		}
 
@@ -757,29 +767,30 @@ class WP_Object_Cache {
 
 		try {
 			$value = $this->redis->hGet($group_key, $key);
-
-			if ($value === false) {
-				return false;
-			}
-
-			if (is_array($value) and array_key_exists('_d', $value)) {
-				if (!is_numeric($value['_d']) or (isset($value['_t']) and time() > (int) $value['_t'])) {
-					return false;
-				}
-
-				$new_value = (int) $value['_d'] + $offset;
-				$value['_d'] = $new_value;
-				$this->redis->hSet($group_key, $key, $value);
-				$value = $new_value;
-			} elseif (!is_numeric($value)) {
-				return false;
-			} else {
-				$value = (int) $value + $offset;
-				$this->redis->hSet($group_key, $key, $value);
-			}
 		} catch (Exception $e) {
 			$this->handle_error($e);
 
+			return false;
+		}
+
+		$expire_at = 0;
+
+		if (is_array($value) and array_key_exists('_d', $value)) {
+			if ($this->is_expired($value, time())) {
+				return false;
+			}
+
+			$expire_at = (int) ($value['_t'] ?? 0);
+			$value = $value['_d'];
+		}
+
+		if ($value === false or !is_numeric($value)) {
+			return false;
+		}
+
+		$value = (int) $value + $offset;
+
+		if (!$this->write($group_key, [$key => $this->pack($value, $expire_at)], $expire_at)) {
 			return false;
 		}
 
@@ -788,58 +799,9 @@ class WP_Object_Cache {
 		return $value;
 	}
 
-	public function decr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
+	public function decr(int|string|null $key, int $offset = 1, ?string $group = 'default'): int|bool
 	{
-		if ($group === '') {
-			$group = 'default';
-		}
-
-		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
-			$value = $this->get($key, $group);
-
-			if ($value === false or !is_numeric($value)) {
-				return false;
-			}
-
-			$value = (int) $value - $offset;
-			$this->cache[$group][$key] = $value;
-
-			return $value;
-		}
-
-		$group_key = $this->build_group($group);
-
-		try {
-			$value = $this->redis->hGet($group_key, $key);
-
-			if ($value === false) {
-				return false;
-			}
-
-			if (is_array($value) and array_key_exists('_d', $value)) {
-				if (!is_numeric($value['_d']) or (isset($value['_t']) and time() > (int) $value['_t'])) {
-					return false;
-				}
-
-				$new_value = (int) $value['_d'] - $offset;
-				$value['_d'] = $new_value;
-				$this->redis->hSet($group_key, $key, $value);
-				$value = $new_value;
-			} elseif (!is_numeric($value)) {
-				return false;
-			} else {
-				$value = (int) $value - $offset;
-				$this->redis->hSet($group_key, $key, $value);
-			}
-		} catch (Exception $e) {
-			$this->handle_error($e);
-
-			return false;
-		}
-
-		$this->cache[$group][$key] = $value;
-
-		return $value;
+		return $this->incr($key, -$offset, $group);
 	}
 
 	public function flush(): bool
@@ -850,15 +812,33 @@ class WP_Object_Cache {
 			return true;
 		}
 
-		try {
-			$this->redis->flushDb(true); // Async flush
-		} catch (Exception $e) {
-			$this->handle_error($e);
+		// Delete only the keys with the key salt. Other sites in the same database keep their keys.
+		$pattern = addcslashes($this->key_salt, '*?[]\\') . ':*';
+		$iterator = null;
+		$flushed = true;
+		$error = null;
 
-			return false;
+		try {
+			do {
+				$keys = $this->redis->scan($iterator, $pattern, 1000);
+
+				// SCAN returns false when no keys are left or on an error
+				if ($keys === false) {
+					$flushed = ($iterator === 0);
+				} elseif ($keys) {
+					$flushed = ($this->redis->unlink($keys) !== false);
+				}
+			} while ($flushed and $iterator > 0);
+		} catch (Exception $error) {
+			$flushed = false;
 		}
 
-		return true;
+		if (!$flushed) {
+			// Old values stay in Redis, so stop using the cache until the next request flushes it
+			$this->handle_error($error, true);
+		}
+
+		return $flushed;
 	}
 
 	public function flush_runtime(): bool
@@ -869,9 +849,9 @@ class WP_Object_Cache {
 		return true;
 	}
 
-	public function flush_group(string $group): bool
+	public function flush_group(?string $group): bool
 	{
-		if ($group === '') {
+		if ($group === null or $group === '') {
 			$group = 'default';
 		}
 
@@ -948,17 +928,26 @@ class WP_Object_Cache {
 	}
 
 	/**
-	 * Deactivate the cache and flag a full flush only on a real outage
+	 * Log an error. Deactivate the cache and flag a flush if $flush is true or Redis does not reply to PING.
+	 *
+	 * @param Exception|null $e     The exception, or null to log the last error reply of Redis
+	 * @param bool           $flush True after a failed write or delete, because the old value stays in Redis
 	 */
-	private function handle_error(Exception $e): void
+	private function handle_error(?Exception $e = null, bool $flush = false): void
 	{
-		try {
-			$active = (bool) $this->redis->ping();
-		} catch (Exception $ignored) {
-			$active = false;
+		$message = $e ? $e->getMessage() : ($this->redis->getLastError() ? : 'Unknown error');
+
+		$this->redis->clearLastError();
+
+		if (!$flush) {
+			try {
+				$flush = !$this->redis->ping();
+			} catch (Exception $ignored) {
+				$flush = true;
+			}
 		}
 
-		if (!$active) {
+		if ($flush) {
 			$this->active = false;
 
 			if (!file_exists(__DIR__ . '/.ocflush')) {
@@ -966,7 +955,62 @@ class WP_Object_Cache {
 			}
 		}
 
-		trigger_error('Twee Redis Object Cache: ' . $e->getMessage(), E_USER_NOTICE);
+		trigger_error('Twee Redis Object Cache: ' . $message, E_USER_NOTICE);
+	}
+
+	/**
+	 * Store packed values in a group hash. Send the field TTLs in the same round trip.
+	 * If the write fails, the old values stay in Redis, so stop using the cache and flag a flush.
+	 *
+	 * @param string $group_key The group hash key
+	 * @param array  $values    Packed values. The array keys are the field names.
+	 * @param int    $expire_at The Unix time of expiration, or 0 for no expiration
+	 */
+	private function write(string $group_key, array $values, int $expire_at): bool
+	{
+		$error = null;
+
+		try {
+			if ($expire_at > 0 and $this->field_expiry) {
+				$result = $this->redis->pipeline()->hMSet($group_key, $values)->hExpireAt($group_key, $expire_at, array_keys($values))->exec();
+				$stored = (is_array($result) and $result[0] !== false);
+				$this->field_expiry = ($stored and $result[1] !== false);
+			} else {
+				$stored = ($this->redis->hMSet($group_key, $values) !== false);
+			}
+		} catch (Exception $error) {
+			$stored = false;
+		}
+
+		if (!$stored) {
+			$this->handle_error($error, true);
+		}
+
+		return $stored;
+	}
+
+	/**
+	 * Values with a TTL and booleans false are stored as an array with the "_t" and "_d" keys
+	 */
+	private function pack(mixed $data, int $expire_at): mixed
+	{
+		if ($expire_at > 0) {
+			return [
+				'_t' => $expire_at,
+				'_d' => $data,
+			];
+		}
+
+		if ($data === false) {
+			return ['_d' => false];
+		}
+
+		return $data;
+	}
+
+	private function is_expired(mixed $value, int $time): bool
+	{
+		return (is_array($value) and array_key_exists('_d', $value) and isset($value['_t']) and $time > (int) $value['_t']);
 	}
 
 	private function build_group(string $group = 'default'): string
