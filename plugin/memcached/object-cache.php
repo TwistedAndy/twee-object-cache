@@ -211,6 +211,11 @@ class WP_Object_Cache
 
 	private string $key_salt = '';
 
+	/**
+	 * The key salt without the site version
+	 */
+	private string $site_salt = '';
+
 	private bool $active = false;
 
 	private Memcached $memcached;
@@ -238,15 +243,16 @@ class WP_Object_Cache
 			$this->blog_prefix = get_current_blog_id() . ':';
 		}
 
+		// The host name changes between web, WP-CLI and multisite requests, so the default salt uses the database
 		if (defined('WP_CACHE_KEY_SALT')) {
 			$this->key_salt = WP_CACHE_KEY_SALT;
 		} else {
-			$host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
-			$this->key_salt = preg_replace('/[^a-zA-Z0-9]/', '_', $host);
+			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
 		}
 
+		// Keys have a length limit. A hash keeps two long salts with the same start apart.
 		if (strlen($this->key_salt) > 20) {
-			$this->key_salt = substr($this->key_salt, 0, 20);
+			$this->key_salt = substr($this->key_salt, 0, 12) . substr(md5($this->key_salt), 0, 8);
 		}
 
 		global $memcached_servers;
@@ -314,23 +320,33 @@ class WP_Object_Cache
 			$this->memcached->addServers($servers);
 		}
 
-		$stats = $this->memcached->getStats();
+		/*
+		 * All keys of the site include the site version, so flush() only changes the version.
+		 * Other sites on the same servers keep their keys. The read also shows if the server is available.
+		 */
+		$this->site_salt = $this->key_salt;
+		$flush_key = $this->site_salt . ':flush';
+		$version = $this->memcached->get($flush_key);
 
-		if (is_array($stats)) {
-			foreach ($stats as $data) {
-				if (is_array($data) and !empty($data['pid'])) {
-					$this->active = true;
-					break;
-				}
+		if ($this->memcached->getResultCode() === Memcached::RES_NOTFOUND) {
+			// Use add() so concurrent requests agree on a single version
+			$version = bin2hex(random_bytes(4));
+
+			if (!$this->memcached->add($flush_key, $version) and in_array($this->memcached->getResultCode(), [Memcached::RES_NOTSTORED, Memcached::RES_DATA_EXISTS], true)) {
+				$version = $this->memcached->get($flush_key);
 			}
+		}
+
+		if ($this->memcached->getResultCode() === Memcached::RES_SUCCESS and is_string($version)) {
+			$this->active = true;
+			$this->key_salt = $this->site_salt . '_' . $version;
 		}
 
 		// Flush stale cache if the server was previously offline
 		$flag_file = __DIR__ . '/.ocflush';
 
 		if ($this->active) {
-			if (file_exists($flag_file)) {
-				$this->memcached->flush();
+			if (file_exists($flag_file) and $this->flush()) {
 				@unlink($flag_file);
 			}
 		} else {
@@ -510,6 +526,11 @@ class WP_Object_Cache
 			return true;
 		}
 
+		// Memcached reads a TTL of more than 30 days as a Unix time
+		if ($expire > 2592000) {
+			$expire += time();
+		}
+
 		$result = $this->memcached->set($this->build_key($key, $group), $data, $expire);
 
 		if (!$result) {
@@ -568,7 +589,12 @@ class WP_Object_Cache
 			return true;
 		}
 
-		$added = $this->memcached->add($this->build_key($key, $group), $data, (int) $expire);
+		// Memcached reads a TTL of more than 30 days as a Unix time
+		if ($expire > 2592000) {
+			$expire += time();
+		}
+
+		$added = $this->memcached->add($this->build_key($key, $group), $data, $expire);
 
 		if (!$added) {
 			$code = $this->memcached->getResultCode();
@@ -614,7 +640,12 @@ class WP_Object_Cache
 		}
 
 		if (!isset($this->non_persistent_groups[$group]) and $this->active) {
-			$replaced = $this->memcached->replace($this->build_key($key, $group), $data, (int) $expire);
+			// Memcached reads a TTL of more than 30 days as a Unix time
+			if ($expire > 2592000) {
+				$expire += time();
+			}
+
+			$replaced = $this->memcached->replace($this->build_key($key, $group), $data, $expire);
 
 			if (!$replaced and $this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
 				if ($this->memcached->getResultCode() === Memcached::RES_E2BIG) {
@@ -652,25 +683,8 @@ class WP_Object_Cache
 			return $deleted_runtime;
 		}
 
-		$memcached_key = $this->build_key($key, $group);
-
-		// Check if the item is chunked before deleting
-		$value = $this->memcached->get($memcached_key);
-		$code = $this->memcached->getResultCode();
-
-		if ($code === Memcached::RES_SUCCESS and is_array($value) and !empty($value['__chunk_list']) and is_array($value['__chunk_list'])) {
-			$chunk_keys = [];
-
-			foreach ($value['__chunk_list'] as $chunk_key) {
-				$chunk_keys[] = $this->build_key((string) $chunk_key, $group);
-			}
-
-			if (!empty($chunk_keys)) {
-				$this->memcached->deleteMulti($chunk_keys);
-			}
-		}
-
-		$deleted = $this->memcached->delete($memcached_key);
+		// Chunks of a chunked value stay until Memcached evicts them. No request reads them again.
+		$deleted = $this->memcached->delete($this->build_key($key, $group));
 		$code = $this->memcached->getResultCode();
 
 		if (!$deleted and $code !== Memcached::RES_NOTFOUND) {
@@ -714,38 +728,26 @@ class WP_Object_Cache
 			$memcached_keys[$key] = $this->build_key($key, $group);
 		}
 
-		$delete_keys = array_values($memcached_keys);
-
-		$raw_values = $this->memcached->getMulti($delete_keys);
-		$code = $this->memcached->getResultCode();
-
-		if ($code !== Memcached::RES_SUCCESS and $code !== Memcached::RES_NOTFOUND) {
-			$this->handle_error($this->memcached->getResultMessage());
-
-			foreach ($values as $key => $value) {
-				$values[$key] = false;
-			}
-		}
-
-		if (!is_array($raw_values)) {
-			$raw_values = [];
-		}
-
-		foreach ($raw_values as $raw_value) {
-			if (is_array($raw_value) and !empty($raw_value['__chunk_list']) and is_array($raw_value['__chunk_list'])) {
-				foreach ($raw_value['__chunk_list'] as $chunk_key) {
-					$delete_keys[] = $this->build_key((string) $chunk_key, $group);
-				}
-			}
-		}
-
-		$results = $this->memcached->deleteMulti($delete_keys);
+		// Chunks of a chunked value stay until Memcached evicts them. No request reads them again.
+		$results = $this->memcached->deleteMulti(array_values($memcached_keys));
 
 		if (is_array($results)) {
+			$failed = false;
+
 			foreach ($memcached_keys as $key => $memcached_key) {
-				if (!empty($results[$memcached_key]) and ($values[$key] !== false or array_key_exists($memcached_key, $raw_values))) {
+				// deleteMulti() returns true or a result code for each key
+				$result = $results[$memcached_key] ?? Memcached::RES_NOTFOUND;
+
+				if ($result === true) {
 					$values[$key] = true;
+				} elseif ($result !== Memcached::RES_NOTFOUND) {
+					$values[$key] = false;
+					$failed = true;
 				}
+			}
+
+			if ($failed) {
+				$this->handle_error($this->memcached->getResultMessage());
 			}
 		} else {
 			if ($this->memcached->getResultCode() !== Memcached::RES_NOTFOUND) {
@@ -846,13 +848,20 @@ class WP_Object_Cache
 	{
 		$this->flush_runtime();
 
-		if ($this->active) {
-			$this->memcached->flush();
-
-			if ($this->memcached->getResultCode() !== Memcached::RES_SUCCESS) {
-				$this->handle_error($this->memcached->getResultMessage());
-			}
+		if (!$this->active) {
+			return true;
 		}
+
+		$version = bin2hex(random_bytes(4));
+
+		if (!$this->memcached->set($this->site_salt . ':flush', $version, 0)) {
+			// Old values stay available, so stop using the cache until the next request flushes it
+			$this->handle_error($this->memcached->getResultMessage(), true);
+
+			return false;
+		}
+
+		$this->key_salt = $this->site_salt . '_' . $version;
 
 		return true;
 	}

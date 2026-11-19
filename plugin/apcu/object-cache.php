@@ -230,15 +230,16 @@ class WP_Object_Cache {
 			$this->blog_prefix = get_current_blog_id() . ':';
 		}
 
+		// The host name changes between multisite hosts, so the default salt uses the database
 		if (defined('WP_CACHE_KEY_SALT')) {
 			$this->key_salt = WP_CACHE_KEY_SALT;
 		} else {
-			$host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
-			$this->key_salt = preg_replace('/[^a-zA-Z0-9]/', '_', $host);
+			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
 		}
 
+		// A hash keeps two long salts with the same start apart
 		if (strlen($this->key_salt) > 20) {
-			$this->key_salt = substr($this->key_salt, 0, 20);
+			$this->key_salt = substr($this->key_salt, 0, 12) . substr(md5($this->key_salt), 0, 8);
 		}
 
 		$this->active = (function_exists('apcu_enabled') and apcu_enabled());
@@ -379,13 +380,20 @@ class WP_Object_Cache {
 			return false;
 		}
 
-		$cache_key = $this->build_key($key, $group);
-
-		if (apcu_exists($cache_key)) {
+		// apcu_add() is atomic, so only one request can add the key
+		if (!isset($this->non_persistent_groups[$group]) and $this->active and !apcu_add($this->build_key($key, $group), $data, $expire)) {
 			return false;
 		}
 
-		return $this->set($key, $data, $group, $expire);
+		$this->cache[$group][$key] = $data;
+		$this->cache_sets++;
+
+		if (count($this->cache[$group]) > $this->runtime_cache_limit) {
+			reset($this->cache[$group]);
+			unset($this->cache[$group][key($this->cache[$group])]);
+		}
+
+		return true;
 	}
 
 	public function add_multiple(array $data, string $group = 'default', int $expire = 0): array

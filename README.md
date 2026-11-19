@@ -28,12 +28,14 @@ This repository contains caching plugins for three different backends: **APCu**,
 - On Redis 7.4 or later, Redis deletes expired hash fields with `HEXPIREAT`. On older versions, the drop-in deletes an expired field when a request reads it.
 - Redis `wp_cache_flush()` deletes only the keys with the key salt, so other sites in the same database keep their cache.
 - The **Memcached** implementation namespaces keys by installation, blog, and group, and uses per-group version counters for logical group flushing.
+- Memcached keys include a site version. `wp_cache_flush()` changes this version, so other sites on the same servers keep their cache.
+- Memcached reads a TTL of more than 30 days as a Unix time, so the drop-in converts such a TTL to a Unix time.
 
 ### 4. Multisite & Context Compatibility
 
 - Prefixes non-global groups with the current blog ID in multisite installations; registered global groups omit the blog prefix.
 - Supports `wp_cache_switch_to_blog()` while preserving global runtime entries and isolating blog-scoped entries.
-- Uses `WP_CACHE_KEY_SALT` to keep web, Cron, and WP-CLI requests in the same namespace when their detected host values differ. The Redis default salt uses the database name and the table prefix, so all requests to one site use the same namespace.
+- Uses `WP_CACHE_KEY_SALT` to keep web, Cron, and WP-CLI requests in the same namespace when their detected host values differ. The default salt uses the database name and the table prefix, so all requests to one site use the same namespace.
 
 ## Reliability & Test Coverage
 
@@ -41,7 +43,7 @@ This repository contains caching plugins for three different backends: **APCu**,
 - When a Redis command fails and Redis does not reply to `PING`, the drop-in stops using Redis for the remainder of the request.
 - When a Redis write or delete fails, the old value stays in Redis. The drop-in then stops using Redis for the remainder of the request and creates the `.ocflush` marker.
 - Backend initialization failures create WordPress admin notices. Runtime Redis errors use `E_USER_NOTICE`; Memcached and selected APCu errors use `E_USER_WARNING`. Display and logging follow the site's PHP and WordPress error configuration.
-- On detected Redis or Memcached failures, the drop-in attempts to create an internal `.ocflush` marker. On a later successful initialization, Redis deletes all keys with the key salt and Memcached flushes its configured pool before the marker is removed. This best-effort recovery requires the deployed drop-in directory to be writable.
+- On detected Redis or Memcached failures, the drop-in attempts to create an internal `.ocflush` marker. On a later successful initialization, Redis deletes all keys with the key salt and Memcached changes the site version before the marker is removed. This best-effort recovery requires the deployed drop-in directory to be writable.
 - The PHPUnit integration suite loads each drop-in directly with lightweight WordPress function stubs and exercises it against the selected live backend.
 - Shared coverage includes core `wp_cache_*` operations, runtime and backend persistence, bulk operations, expiration, global and non-persistent groups, group flushing, multisite isolation, and blog switching. Memcached-specific cases also cover oversized payload chunking.
 - Tests skip when the selected PHP extension or backend is unavailable and do not boot a complete WordPress installation.
@@ -71,11 +73,10 @@ Configuration values are optional when the built-in local defaults suit the envi
 
 ### All backends
 
-- `WP_CACHE_KEY_SALT` - Cache namespace. When omitted, the Memcached and APCu drop-ins derive it from `HTTP_HOST`, then `SERVER_NAME`, then `localhost`, and replace non-alphanumeric characters with underscores. Memcached and APCu truncate the salt to 20 characters.
+- `WP_CACHE_KEY_SALT` - Cache namespace. When omitted, the drop-in uses `DB_NAME` and `$table_prefix`, and replaces characters other than letters, digits and underscores with underscores. Redis does not truncate the salt. Memcached and APCu replace a salt of more than 20 characters with its first 12 characters and 8 characters of its MD5 hash.
 
 ### Redis
 
-- `WP_CACHE_KEY_SALT` - When omitted, the drop-in uses `DB_NAME` and `$table_prefix`, and replaces characters other than letters, digits and underscores with underscores. Redis does not truncate the salt.
 - `WP_REDIS_HOST` - Redis host or Unix socket. Default: `127.0.0.1`.
 - `WP_REDIS_PORT` - Redis port. Default: `6379`.
 - `WP_REDIS_TIMEOUT` - Connection and read timeout in seconds. Default: `1`.
