@@ -143,8 +143,11 @@ function toc_dropin_test(string $engine, array $settings): array
 				}
 			}
 
+			// The result message only says "SOME ERRORS WERE REPORTED". The last error of libmemcached has the reason, such as "(0x1f) A TIMEOUT OCCURRED,  host: 127.0.0.1:11211 -> version.cc:40".
 			if (!$versions) {
-				return ['ok' => false, 'message' => 'Cannot connect to Memcached: ' . $memcached->getResultMessage()];
+				$reason = preg_match('/^(?:\(\w+\)\s*)?([^,]+)/', $memcached->getLastErrorMessage(), $match) ? $match[1] : $memcached->getResultMessage();
+
+				return ['ok' => false, 'message' => 'Cannot connect to Memcached at ' . implode(', ', toc_settings_servers($settings['memcached_servers'])) . '. ' . ucfirst(strtolower(trim($reason))) . '.'];
 			}
 
 			$works = ($memcached->set($key, 'ok', 60) and $memcached->get($key) === 'ok' and $memcached->delete($key));
@@ -166,6 +169,11 @@ function toc_dropin_test(string $engine, array $settings): array
 			return ['ok' => false, 'message' => 'Select Redis, Memcached or APCu.'];
 		}
 	} catch (Throwable $e) {
+		// Redis answers NOAUTH when its configuration has a password (requirepass or an ACL user) and the settings send none
+		if ($engine === 'redis' and str_starts_with($e->getMessage(), 'NOAUTH')) {
+			return ['ok' => false, 'message' => 'Redis needs a password, but the Password field is empty. Enter the password from the Redis configuration of the server (requirepass in redis.conf), or define WP_REDIS_PASSWORD in wp-config.php.'];
+		}
+
 		return ['ok' => false, 'message' => $e->getMessage()];
 	}
 

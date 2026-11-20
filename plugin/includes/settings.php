@@ -211,6 +211,7 @@ function toc_settings_page(): void
 
 			$items .= '</select></div><span class="text">When the cache is on, Save Changes replaces the drop-in.</span>' . (isset($hints['handler']) ? '<span class="text text_found">Found on this server: ' . $names[$hints['handler']] . '</span>' : '') . '</div>';
 			$options = '<label class="option"><input type="checkbox" name="trace" value="1"' . checked($settings['trace'], true, false) . '><span class="details"><span class="label">Tracing</span><span class="text">Record the backend calls for Query Monitor. Each call keeps a backtrace in memory, so use it only on development sites.</span></span></label>';
+			$options .= '<label class="option"><input type="hidden" name="delete_settings" value="0"><input type="checkbox" name="delete_settings" value="1"' . checked($settings['delete_settings'], true, false) . '><span class="details"><span class="label">Delete settings on deactivation</span><span class="text">Delete wp-content/cache-config.php when you deactivate the plugin. The constants in wp-config.php stay.</span></span></label>';
 		} else {
 			// Only the section of the selected handler shows, so its buttons use the selected handler. APCu has no connection fields to reset.
 			$buttons = '<button type="submit" name="toc_test" value="1" class="button" title="Connect with the values of the form, then write, read and delete a test key. The values are not saved.">Test Connection</button>';
@@ -478,19 +479,33 @@ function toc_settings_detect(): array
 	// The default ports, such as Memcached on SiteGround
 	if (!isset($values['redis_host']) and !isset($values['memcached_servers'])) {
 		$ports = [
-			6379  => ['redis_host' => '127.0.0.1', 'redis_port' => 6379],
-			11211 => ['memcached_servers' => [['127.0.0.1', 11211]]],
+			6379  => ["PING\r\n", ['redis_host' => '127.0.0.1', 'redis_port' => 6379]],
+			11211 => ["version\r\n", ['memcached_servers' => [['127.0.0.1', 11211]]]],
 		];
 
-		foreach ($ports as $port => $port_values) {
+		foreach ($ports as $port => [$command, $port_values]) {
 			$connection = @fsockopen('127.0.0.1', $port, $code, $message, 0.2);
 
-			if ($connection) {
-				fclose($connection);
-				$values += $port_values;
-				$sources[] = '127.0.0.1:' . $port;
-				break;
+			if (!$connection) {
+				continue;
 			}
+
+			// Redis answers +PONG, or NOAUTH when it needs a password, and Memcached answers VERSION. Another program on the port does not count.
+			stream_set_timeout($connection, 0, 200000);
+			fwrite($connection, $command);
+			$reply = (string) fgets($connection, 128);
+			fclose($connection);
+
+			if (str_starts_with($reply, '+PONG') or str_starts_with($reply, 'VERSION ')) {
+				$sources[] = '127.0.0.1:' . $port;
+			} elseif (str_starts_with($reply, '-NOAUTH')) {
+				$sources[] = '127.0.0.1:' . $port . ' (Redis needs a password)';
+			} else {
+				continue;
+			}
+
+			$values += $port_values;
+			break;
 		}
 	}
 
@@ -527,7 +542,7 @@ function toc_settings_supported(): array
  *
  * @param array|null $input The values of the form or of the detection, or null for the saved settings
  *
- * @return array The handler, the trace flag and the value of each field in TOC_SETTINGS
+ * @return array The handler, the trace flag, the delete_settings flag and the value of each field in TOC_SETTINGS
  */
 function toc_settings_get(?array $input = null): array
 {
@@ -535,9 +550,11 @@ function toc_settings_get(?array $input = null): array
 	$values = $input ?? (is_file($config_file) ? (array) include $config_file : toc_settings_detect()['values']);
 	$handler = (string) ($values['handler'] ?? '');
 
+	// The settings are deleted on deactivation unless the switch is off
 	$settings = [
-		'handler' => in_array($handler, ['redis', 'memcached', 'apcu'], true) ? $handler : '',
-		'trace'   => !empty($values['trace']),
+		'handler'         => in_array($handler, ['redis', 'memcached', 'apcu'], true) ? $handler : '',
+		'trace'           => !empty($values['trace']),
+		'delete_settings' => (bool) ($values['delete_settings'] ?? true),
 	];
 
 	// The switches with the default null are on when the server supports them, as in the drop-ins
@@ -559,7 +576,7 @@ function toc_settings_get(?array $input = null): array
 				$value = is_numeric($value) ? $value + 0 : $default;
 			} elseif ($type === 'servers') {
 				// Other plugins and hosts such as WP Engine put the servers in buckets, as "host:port" or "unix://path" strings
-				if (is_array($value) and !array_is_list($value)) {
+				if (is_array($value) and $value !== array_values($value)) {
 					$value = (array) ($value['default'] ?? reset($value));
 				}
 

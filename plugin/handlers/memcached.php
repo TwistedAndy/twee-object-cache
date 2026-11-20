@@ -297,7 +297,7 @@ class WP_Object_Cache
 		}
 
 		// Other plugins and hosts such as WP Engine put the servers in buckets, as "host:port" or "unix://path" strings
-		if (!array_is_list($servers)) {
+		if ($servers !== array_values($servers)) {
 			$servers = (array) ($servers['default'] ?? reset($servers));
 		}
 

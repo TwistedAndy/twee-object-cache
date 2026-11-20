@@ -46,11 +46,22 @@ register_activation_hook(__FILE__, function(): void {
 });
 
 /**
- * Remove the drop-in on deactivation. A drop-in of another plugin stays.
+ * Remove the drop-in and the flush marker on deactivation. A drop-in of another plugin stays.
+ *
+ * The settings are deleted too, unless "Delete settings on deactivation" is off on the Cache Settings page.
  */
 register_deactivation_hook(__FILE__, function(): void {
 	if (toc_dropin_engine() !== '') {
 		wp_cache_flush();
 		@unlink(WP_CONTENT_DIR . '/object-cache.php');
 	}
+
+	$config_file = WP_CONTENT_DIR . '/cache-config.php';
+	$config = is_file($config_file) ? (array) include $config_file : [];
+
+	if ($config['delete_settings'] ?? true) {
+		@unlink($config_file);
+	}
+
+	@unlink(WP_CONTENT_DIR . '/cache-flush');
 });

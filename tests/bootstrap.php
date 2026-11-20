@@ -168,7 +168,8 @@ if (!defined('ABSPATH')) {
  * skip themselves.
  * -------------------------------------------------------------------------
  */
-$dropin = dirname(__DIR__) . '/plugin/handlers/' . $engine . '.php';
+// TW_CACHE_SIMPLE=1 tests the simple drop-in in dropins/ instead of the handler of the plugin
+$dropin = getenv('TW_CACHE_SIMPLE') ? dirname(__DIR__) . '/dropins/' . $engine . '/object-cache.php' : dirname(__DIR__) . '/plugin/handlers/' . $engine . '.php';
 
 require_once $dropin;
 
