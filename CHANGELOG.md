@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.4.0
+
+The settings file and its keys have new names. After this update, open **Settings → Cache Settings**, examine the values and select **Save Changes**.
+
+- The page writes the settings to `wp-content/cache-config.php`. A key is the name of its constant in lower case and without `WP_`, such as `redis_host` for `WP_REDIS_HOST`. The plugin does not read `oc-config.php`. Until you save the settings again, the drop-in uses the constants in `wp-config.php` and the default values. Then you can delete `oc-config.php`.
+- The flush marker is now `wp-content/cache-flush`. You can delete an old `oc-flush` file.
+- The **Detect** button is removed. The page finds the settings of the server each time it opens. When a found value is different from the value of the form, it shows under the field. The page does not show a found password.
+- **Reset Connection** fills the connection fields with the found values or the defaults. It does not save the values.
+- **Test** is now **Test Connection**. **Test Connection** and **Reset Connection** are in the section of the handler.
+- **Turn On** and **Turn Off** are now **Enable Cache** and **Disable Cache**, as in the Admin Bar.
+- When the PHP extensions of the server do not support igbinary, compression or Relay, the page turns off the switch and shows it as unavailable.
+- The time fields show their unit, `s` or `ms`, after the field.
+- The Plugins list has a **Settings** link for the plugin.
+- The boxes at the top of the **Object Cache** panel in Query Monitor have the same width.
+
+Fixes:
+
+- After the upload of the plugin ZIP, the **Activate** link pointed to a drop-in, and WordPress showed "The plugin does not have a valid header". The drop-ins no longer have a plugin header.
+- The fields on the page had empty cells between them.
+
 ## 1.3.0
 
 The **Cache Settings** page now finds the settings of the host. After this update, the cache starts empty one time, because the Redis keys have a new format.

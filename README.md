@@ -97,11 +97,13 @@ Configuration values are optional when the built-in local defaults suit the envi
 
 - The page writes the settings to `wp-content/cache-config.php`, a PHP file that returns an array. A key is the name of its constant in lower case and without `WP_`, such as `redis_host` for `WP_REDIS_HOST`. The drop-in reads it once on each request. OPcache keeps it in memory.
 - A constant in `wp-config.php` wins over the value on the page. The page shows the field as read-only.
-- **Test** connects to the backend with the values of the form, then writes, reads and deletes a test key. It does not save the values.
+- **Test Connection** in the section of the handler connects to the backend with the values of the form, then writes, reads and deletes a test key. It does not save the values.
 - When the cache is on, **Save Changes** tests the new values first and saves them only when the test passes. When the test fails, the form keeps the values that you typed. When you select another handler, it replaces the drop-in.
-- **Turn On** tests the saved values and installs the drop-in of the selected handler. **Turn Off** removes the drop-in.
-- After **Save Changes** and **Turn On**, the drop-in flushes the cache before its first read. Thus, values in an old format or from another backend do not stay in the cache.
-- **Detect** fills the form with the settings of the host and of other object cache plugins. It does not save the values. When `cache-config.php` does not exist, the page shows the detected settings, and **Turn On** saves them. See [Detection](#detection).
+- **Enable Cache** tests the saved values and installs the drop-in of the selected handler. **Disable Cache** removes the drop-in.
+- After **Save Changes** and **Enable Cache**, the drop-in flushes the cache before its first read. Thus, values in an old format or from another backend do not stay in the cache.
+- The page finds the settings of the host and of other object cache plugins each time it opens. When `cache-config.php` does not exist, the form shows the found settings, and **Enable Cache** saves them. When a found value is different from the value of the form, it shows under the field. The page does not show a found password. See [Detection](#detection).
+- When the PHP extensions of the server do not support igbinary, compression or Relay, the page turns off the switch, shows it as unavailable, and does not suggest a found value for it.
+- **Reset Connection** in the Redis and Memcached sections fills the connection fields with the found values or the defaults: the host, the port, the user, the password, the database, the timeouts, the retry interval and the Memcached servers. The other fields keep their values. It does not save the values.
 - **Tracing** logs the backend calls for the Query Monitor panel. See [Query Monitor](#query-monitor).
 - On a site with more than one web server, the page changes the files only on the server that handles the request. Use constants on these sites.
 

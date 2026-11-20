@@ -78,6 +78,9 @@
     grid-column: auto;
   }
 }
+.cache_box .item_full {
+  grid-column: 1/-1;
+}
 .cache_box .item .label {
   display: block;
   margin-bottom: 4px;
@@ -92,12 +95,34 @@
 .cache_box .field textarea {
   min-height: 64px;
 }
+.cache_box .field_unit {
+  display: flex;
+}
+.cache_box .field_unit input {
+  margin: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.cache_box .field .unit {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid #8c8f94;
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  background: #f6f7f7;
+  color: #50575e;
+  white-space: nowrap;
+}
 .cache_box .text {
   display: block;
   margin-top: 4px;
   color: #646970;
   font-size: 12px;
   line-height: 1.5;
+}
+.cache_box .text_found {
+  color: #2271b1;
 }
 .cache_box .options {
   --columns-count: 2;

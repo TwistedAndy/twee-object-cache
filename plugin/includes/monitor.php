@@ -108,6 +108,9 @@ class Twee_Cache_QM_Output extends QM_Output_Html
 
 		$this->before_non_tabular_output();
 
+		// The grid of Query Monitor gives each box the same width, so a long text wraps and does not stretch its box
+		echo '<div class="qm-grid">';
+
 		echo '<section><h3>Status</h3><p>';
 		echo esc_html($info['engine']) . '<br>';
 		echo $info['active'] ? 'Connected' : '<span class="qm-warn">Not available. The request uses the runtime cache only.</span>';
@@ -151,7 +154,7 @@ class Twee_Cache_QM_Output extends QM_Output_Html
 			echo '</p></section>';
 		}
 
-		echo '</div><div class="qm-boxed qm-boxed-wrap">';
+		echo '</div></div><div class="qm-boxed">';
 
 		echo '<section><h3>Groups in the Runtime Cache</h3><table><thead><tr><th scope="col">Group</th><th scope="col">Type</th><th scope="col" class="qm-num">Entries</th></tr></thead><tbody>';
 

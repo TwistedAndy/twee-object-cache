@@ -8,7 +8,7 @@ if (!defined('ABSPATH')) {
 }
 
 /**
- * The fields of each handler: the label, the type, the default value and the description
+ * The fields of each handler: the label, the type, the default value, the description and the unit that shows after a number field
  *
  * The key of a field in cache-config.php is the name of the wp-config.php constant that wins over it, in lower case and without WP_.
  * The $memcached_servers global wins over the memcached_servers field.
@@ -24,8 +24,8 @@ const TOC_SETTINGS = [
 		'redis_username'           => ['Username', 'text', '', 'The ACL user of Redis 6 and later. Keep it empty to log in with the password only.'],
 		'redis_password'           => ['Password', 'password', '', 'Keep it empty when Redis has no password.'],
 		'redis_database'           => ['Database', 'number', 0, ''],
-		'redis_timeout'            => ['Timeout', 'number', 1, 'The time in seconds to connect and to read a reply.'],
-		'redis_retry_interval'     => ['Retry interval', 'number', 100, 'The time in milliseconds before the next connection attempt.'],
+		'redis_timeout'            => ['Timeout', 'number', 1, 'The time to connect and to read a reply.', 's'],
+		'redis_retry_interval'     => ['Retry interval', 'number', 100, 'The time before the next connection attempt.', 'ms'],
 		'redis_persistent_connect' => ['Persistent connection', 'checkbox', true, 'Keep the connection open between requests.'],
 		'redis_igbinary'           => ['igbinary', 'checkbox', null, 'Serialize the values with igbinary. It is on by default when the igbinary extension is loaded.'],
 		'redis_compression'        => ['Compression', 'checkbox', null, 'Compress the values with zstd, LZ4 or LZF. It is on by default when phpredis supports one of them.'],
@@ -34,9 +34,9 @@ const TOC_SETTINGS = [
 	],
 	'memcached' => [
 		'memcached_servers'           => ['Servers', 'servers', [['127.0.0.1', 11211]], 'One host:port or Unix socket path on each line.'],
-		'memcached_connect_timeout'   => ['Connect timeout', 'number', 250, 'In milliseconds.'],
-		'memcached_send_timeout'      => ['Send timeout', 'number', 250, 'In milliseconds.'],
-		'memcached_recv_timeout'      => ['Receive timeout', 'number', 250, 'In milliseconds.'],
+		'memcached_connect_timeout'   => ['Connect timeout', 'number', 250, '', 'ms'],
+		'memcached_send_timeout'      => ['Send timeout', 'number', 250, '', 'ms'],
+		'memcached_recv_timeout'      => ['Receive timeout', 'number', 250, '', 'ms'],
 		'memcached_igbinary'          => ['igbinary', 'checkbox', null, 'Serialize the values with igbinary. It is on by default when the memcached extension supports igbinary.'],
 		'memcached_persistent_groups' => ['Protected groups', 'text', 'plugins,themes,counts', 'Comma-separated groups that stay persistent when a plugin makes them non-persistent.'],
 	],
@@ -115,8 +115,11 @@ function toc_settings_page(): void
 	$engine = toc_dropin_engine();
 	$names = ['redis' => 'Redis', 'memcached' => 'Memcached', 'apcu' => 'APCu'];
 	$loaded = ['redis' => extension_loaded('redis'), 'memcached' => extension_loaded('memcached'), 'apcu' => extension_loaded('apcu')];
+	$supported = toc_settings_supported();
 	$test = null;
-	$detected = null;
+	$config_exists = is_file(WP_CONTENT_DIR . '/cache-config.php');
+	$detected = toc_settings_detect();
+	$found = toc_settings_get($detected['values']);
 
 	// The form keeps its values after a test and after a save that failed. The test does not save them.
 	if (!empty($_POST['toc_test']) or !empty($_POST['toc_save'])) {
@@ -124,16 +127,18 @@ function toc_settings_page(): void
 
 		$settings = toc_settings_get(wp_unslash($_POST));
 		$test = empty($_POST['toc_test']) ? null : toc_dropin_test($settings['handler'], $settings);
-	} elseif (!empty($_POST['toc_detect'])) {
+	} elseif (!empty($_POST['toc_reset'])) {
 		check_admin_referer('toc_settings');
 
-		// The detected values replace the values of the form, but Tracing stays as it is
-		$detected = toc_settings_detect();
-		$settings = toc_settings_get($detected['values'] + ['trace' => !empty($_POST['trace'])]);
+		// The connection fields get the found values or the defaults. The other fields keep the values of the form, and nothing is saved.
+		$settings = toc_settings_get(wp_unslash($_POST));
+
+		foreach (['redis_host', 'redis_port', 'redis_username', 'redis_password', 'redis_database', 'redis_timeout', 'redis_retry_interval', 'memcached_servers', 'memcached_connect_timeout', 'memcached_send_timeout', 'memcached_recv_timeout'] as $name) {
+			$settings[$name] = $found[$name];
+		}
 	} else {
-		// Without cache-config.php, the form shows the detected settings
-		$detected = is_file(WP_CONTENT_DIR . '/cache-config.php') ? null : toc_settings_detect();
-		$settings = toc_settings_get($detected['values'] ?? null);
+		// Without cache-config.php, the form shows the settings found on the server
+		$settings = $config_exists ? toc_settings_get() : $found;
 
 		// The Admin Bar menu can enable a handler without a change of the settings
 		if ($engine !== '') {
@@ -143,6 +148,15 @@ function toc_settings_page(): void
 
 	if ($settings['handler'] === '') {
 		$settings['handler'] = array_key_first(array_filter($loaded)) ?? 'redis';
+	}
+
+	// A found value that is different from the value of the form shows under the field. A timeout of 1.0 is the same as 1.
+	$hints = [];
+
+	foreach (array_keys($detected['values']) as $name) {
+		if (array_key_exists($name, $found) and $found[$name] != $settings[$name]) {
+			$hints[$name] = $found[$name];
+		}
 	}
 
 	echo '<div class="wrap cache_box"><h1>Cache Settings</h1>';
@@ -157,22 +171,29 @@ function toc_settings_page(): void
 		echo '<div class="notice inline ' . ($test['ok'] ? 'notice-success' : 'notice-error') . '"><p><strong>' . ($test['ok'] ? 'The test passed.' : 'The test failed.') . '</strong> ' . esc_html($test['message']) . '</p></div>';
 	}
 
-	if ($detected and $detected['sources']) {
-		echo '<div class="notice notice-info inline"><p><strong>The form shows the detected settings.</strong> Sources: ' . esc_html(implode(', ', $detected['sources'])) . '. Select Test to examine them, then select Save Changes or Turn On.</p></div>';
-	} elseif ($detected and !empty($_POST['toc_detect'])) {
-		echo '<div class="notice notice-warning inline"><p>No settings were detected. The form shows the default values.</p></div>';
+	$sources = esc_html(implode(', ', $detected['sources']));
+
+	if (!empty($_POST['toc_reset'])) {
+		echo '<div class="notice notice-info inline"><p><strong>The connection fields show the values found on this server or the defaults.</strong> They are not saved. Select Test Connection to examine them, then select Save Changes.</p></div>';
+	} elseif (!$config_exists and $sources) {
+		echo '<div class="notice notice-info inline"><p><strong>The form shows the settings found on this server.</strong> Sources: ' . $sources . '. Select Test Connection to examine them, then select Save Changes or Enable Cache.</p></div>';
+	} elseif ($hints) {
+		echo '<div class="notice notice-info inline"><p><strong>Some settings found on this server are different.</strong> They show under the fields. Sources: ' . $sources . '.</p></div>';
 	}
 
 	echo '<form method="post"><div class="sections">';
 
 	wp_nonce_field('toc_settings');
 
+	// The Enter key selects the first submit button of the form, so it must be Save Changes and not a button of a section
+	echo '<button type="submit" name="toc_save" value="1" hidden></button>';
+
 	if ($engine !== '') {
-		$status = '<span class="caption caption_success">On</span><div class="buttons"><a class="button" href="' . esc_url(wp_nonce_url(add_query_arg('toc_action', 'disable'), 'toc_action')) . '" title="Remove the drop-in">Turn Off</a></div>';
+		$status = '<span class="caption caption_success">On</span><div class="buttons"><a class="button" href="' . esc_url(wp_nonce_url(add_query_arg('toc_action', 'disable'), 'toc_action')) . '" title="Remove the drop-in">Disable Cache</a></div>';
 	} elseif (file_exists(WP_CONTENT_DIR . '/object-cache.php')) {
 		$status = '<span class="caption caption_error">Another plugin installed wp-content/object-cache.php</span>';
 	} else {
-		$status = '<span class="caption">Off</span><div class="buttons"><a class="button button-primary" href="' . esc_url(wp_nonce_url(add_query_arg('toc_action', 'enable_' . $settings['handler']), 'toc_action')) . '" title="Test the saved settings, install the drop-in and flush the cache">Turn On ' . esc_html($names[$settings['handler']]) . '</a></div>';
+		$status = '<span class="caption">Off</span><div class="buttons"><a class="button button-primary" href="' . esc_url(wp_nonce_url(add_query_arg('toc_action', 'enable_' . $settings['handler']), 'toc_action')) . '" title="Test the saved settings, install the drop-in and flush the cache">Enable Cache</a></div>';
 	}
 
 	foreach (TOC_SETTINGS as $section => $fields) {
@@ -188,23 +209,48 @@ function toc_settings_page(): void
 				$items .= '<option value="' . $handler . '"' . selected($settings['handler'], $handler, false) . disabled(!$loaded[$handler], true, false) . '>' . $name . ($loaded[$handler] ? '' : ' (no extension)') . '</option>';
 			}
 
-			$items .= '</select></div><span class="text">When the cache is on, Save Changes replaces the drop-in.</span></div>';
+			$items .= '</select></div><span class="text">When the cache is on, Save Changes replaces the drop-in.</span>' . (isset($hints['handler']) ? '<span class="text text_found">Found on this server: ' . $names[$hints['handler']] . '</span>' : '') . '</div>';
 			$options = '<label class="option"><input type="checkbox" name="trace" value="1"' . checked($settings['trace'], true, false) . '><span class="details"><span class="label">Tracing</span><span class="text">Record the backend calls for Query Monitor. Each call keeps a backtrace in memory, so use it only on development sites.</span></span></label>';
 		} else {
-			echo '<section class="section" data-handler="' . $section . '"><div class="contents"><h2>' . $names[$section] . '</h2></div>';
+			// Only the section of the selected handler shows, so its buttons use the selected handler. APCu has no connection fields to reset.
+			$buttons = '<button type="submit" name="toc_test" value="1" class="button" title="Connect with the values of the form, then write, read and delete a test key. The values are not saved.">Test Connection</button>';
+
+			if ($section !== 'apcu') {
+				$buttons .= '<button type="submit" name="toc_reset" value="1" class="button" title="Fill the connection fields with the values found on this server or the defaults. The values are not saved.">Reset Connection</button>';
+			}
+
+			echo '<section class="section" data-handler="' . $section . '"><div class="contents contents_split"><h2>' . $names[$section] . '</h2><div class="buttons">' . $buttons . '</div></div>';
 		}
 
-		foreach ($fields as $name => [$label, $type, , $description]) {
+		foreach ($fields as $name => $field) {
+			[$label, $type, , $description] = $field;
+			$unit = $field[4] ?? '';
 			$value = $settings[$name];
 			$global = ($name === 'memcached_servers');
 			$constant = 'WP_' . strtoupper($name);
 			$locked = $global ? !empty($GLOBALS['memcached_servers']) : defined($constant);
 			$source = $global ? '$memcached_servers' : $constant;
 			$id = 'toc-' . strtolower(str_replace('_', '-', $name));
-			$attributes = ' id="' . $id . '" name="' . $name . '"' . ($locked ? ' disabled' : '');
-			$text = $locked ? '<code>' . $source . '</code> in <code>wp-config.php</code> sets this value.' : esc_html($description);
+			$available = ($supported[$name] ?? true);
+			$attributes = ' id="' . $id . '" name="' . $name . '"' . (($locked or !$available) ? ' disabled' : '');
+			$text = $locked ? '<code>' . $source . '</code> in <code>wp-config.php</code> sets this value.' : esc_html($description) . ($available ? '' : ' Not available on this server.');
 			$text = $text === '' ? '' : '<span class="text">' . $text . '</span>';
 			$title = ' title="Constant: ' . $source . '"';
+
+			// The found value shows as the field shows it, but the page does not show a found password
+			if (isset($hints[$name])) {
+				$hint = $hints[$name];
+
+				if ($type === 'checkbox') {
+					$hint = $hint ? 'on' : 'off';
+				} elseif ($type === 'password') {
+					$hint = 'a password';
+				} elseif ($type === 'servers') {
+					$hint = implode(', ', toc_settings_servers($hint));
+				}
+
+				$text .= '<span class="text text_found">Found on this server: ' . esc_html((string) $hint) . '</span>';
+			}
 
 			if ($type === 'checkbox') {
 				// The form does not send an unchecked checkbox, so the hidden field sends its value
@@ -214,25 +260,27 @@ function toc_settings_page(): void
 			}
 
 			if ($type === 'servers') {
-				$lines = [];
-
-				foreach ($value as [$server_host, $server_port]) {
-					$lines[] = $server_port ? $server_host . ':' . $server_port : $server_host;
-				}
-
-				$control = '<textarea rows="3" class="code"' . $attributes . '>' . esc_textarea(implode("\n", $lines)) . '</textarea>';
+				$control = '<textarea rows="3" class="code"' . $attributes . '>' . esc_textarea(implode("\n", toc_settings_servers($value))) . '</textarea>';
 			} else {
 				$control = '<input type="' . $type . '" value="' . esc_attr(is_array($value) ? implode(',', $value) : (string) $value) . '"' . ($type === 'number' ? ' step="any"' : '') . ($type === 'password' ? ' autocomplete="new-password"' : '') . $attributes . '>';
 			}
 
-			// A text field needs two columns of the grid
-			$items .= '<div class="item' . (in_array($type, ['text', 'servers'], true) ? ' item_wide' : '') . '"' . $title . '><label class="label" for="' . $id . '">' . esc_html($label) . '</label><div class="field">' . $control . '</div>' . $text . '</div>';
+			// A text field takes two columns of the grid. The servers and the protected groups take the full row, so the number fields fill the rows between them.
+			$class = 'item';
+
+			if ($type === 'servers' or str_ends_with($name, '_persistent_groups')) {
+				$class .= ' item_full';
+			} elseif ($type === 'text') {
+				$class .= ' item_wide';
+			}
+
+			$items .= '<div class="' . $class . '"' . $title . '><label class="label" for="' . $id . '">' . esc_html($label) . '</label><div class="field' . ($unit ? ' field_unit' : '') . '">' . $control . ($unit ? '<span class="unit">' . $unit . '</span>' : '') . '</div>' . $text . '</div>';
 		}
 
 		echo '<div class="items">' . $items . '</div>' . ($options ? '<div class="options">' . $options . '</div>' : '') . '</section>';
 	}
 
-	echo '</div><div class="buttons"><button type="submit" name="toc_save" value="1" class="button button-primary">Save Changes</button><button type="submit" name="toc_test" value="1" class="button">Test</button><button type="submit" name="toc_detect" value="1" class="button">Detect</button></div></form></div>';
+	echo '</div><div class="buttons"><button type="submit" name="toc_save" value="1" class="button button-primary">Save Changes</button></div></form></div>';
 }
 
 
@@ -242,6 +290,25 @@ function toc_settings_page(): void
 function toc_settings_url(): string
 {
 	return is_multisite() ? network_admin_url('settings.php?page=twee-cache') : admin_url('options-general.php?page=twee-cache');
+}
+
+
+/**
+ * Get the Memcached servers as the Servers field shows them
+ *
+ * @param array $servers The [host, port] pairs from toc_settings_get()
+ *
+ * @return array A "host:port" string for each server, or the path of a Unix socket
+ */
+function toc_settings_servers(array $servers): array
+{
+	$lines = [];
+
+	foreach ($servers as [$host, $port]) {
+		$lines[] = $port ? $host . ':' . $port : $host;
+	}
+
+	return $lines;
 }
 
 
@@ -438,6 +505,22 @@ function toc_settings_detect(): array
 
 
 /**
+ * Find the switches that the PHP extensions of the server support
+ *
+ * @return array The support of igbinary and compression for Redis, of Relay, and of igbinary for Memcached
+ */
+function toc_settings_supported(): array
+{
+	return [
+		'redis_igbinary'     => (defined('Redis::SERIALIZER_IGBINARY') and extension_loaded('igbinary')),
+		'redis_compression'  => (defined('Redis::COMPRESSION_ZSTD') or defined('Redis::COMPRESSION_LZ4') or defined('Redis::COMPRESSION_LZF')),
+		'redis_use_relay'    => class_exists('Relay\Relay'),
+		'memcached_igbinary' => (defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')),
+	];
+}
+
+
+/**
  * Get the settings with their defaults. A constant in wp-config.php wins over a setting.
  *
  * When cache-config.php does not exist, the detected settings replace it.
@@ -458,11 +541,7 @@ function toc_settings_get(?array $input = null): array
 	];
 
 	// The switches with the default null are on when the server supports them, as in the drop-ins
-	$supported = [
-		'redis_igbinary'     => (defined('Redis::SERIALIZER_IGBINARY') and extension_loaded('igbinary')),
-		'redis_compression'  => (defined('Redis::COMPRESSION_ZSTD') or defined('Redis::COMPRESSION_LZ4') or defined('Redis::COMPRESSION_LZF')),
-		'memcached_igbinary' => (defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')),
-	];
+	$supported = toc_settings_supported();
 
 	foreach (TOC_SETTINGS as $fields) {
 		foreach ($fields as $name => [, $type, $default]) {
@@ -474,7 +553,8 @@ function toc_settings_get(?array $input = null): array
 			}
 
 			if ($type === 'checkbox') {
-				$value = (bool) $value;
+				// A switch that the server does not support is off, so that the page does not suggest it
+				$value = ((bool) $value and ($supported[$name] ?? true));
 			} elseif ($type === 'number') {
 				$value = is_numeric($value) ? $value + 0 : $default;
 			} elseif ($type === 'servers') {
