@@ -1,6 +1,6 @@
 <?php
 /**
- * The Cache Settings page. It stores the settings in wp-content/oc-config.php, and the drop-in reads them from there.
+ * The Cache Settings page. It stores the settings in wp-content/cache-config.php, and the drop-in reads them from there.
  */
 
 if (!defined('ABSPATH')) {
@@ -10,37 +10,38 @@ if (!defined('ABSPATH')) {
 /**
  * The fields of each handler: the label, the type, the default value and the description
  *
- * A field has the name of the wp-config.php constant that wins over it. The memcached_servers field has the $memcached_servers global.
+ * The key of a field in cache-config.php is the name of the wp-config.php constant that wins over it, in lower case and without WP_.
+ * The $memcached_servers global wins over the memcached_servers field.
  * A switch with the default null is on when the server supports it.
  */
 const TOC_SETTINGS = [
 	'general'   => [
-		'WP_CACHE_KEY_SALT' => ['Key salt', 'text', '', 'The namespace of the cache keys. When it is empty, the drop-in uses the database name and the table prefix.'],
+		'cache_key_salt' => ['Key salt', 'text', '', 'The namespace of the cache keys. When it is empty, the drop-in uses the database name and the table prefix.'],
 	],
 	'redis'     => [
-		'WP_REDIS_HOST'               => ['Host', 'text', '127.0.0.1', 'A host name, an IP address or the path of a Unix socket.'],
-		'WP_REDIS_PORT'               => ['Port', 'number', 6379, ''],
-		'WP_REDIS_USERNAME'           => ['Username', 'text', '', 'The ACL user of Redis 6 and later. Keep it empty to log in with the password only.'],
-		'WP_REDIS_PASSWORD'           => ['Password', 'password', '', 'Keep it empty when Redis has no password.'],
-		'WP_REDIS_DATABASE'           => ['Database', 'number', 0, ''],
-		'WP_REDIS_TIMEOUT'            => ['Timeout', 'number', 1, 'The time in seconds to connect and to read a reply.'],
-		'WP_REDIS_RETRY_INTERVAL'     => ['Retry interval', 'number', 100, 'The time in milliseconds before the next connection attempt.'],
-		'WP_REDIS_PERSISTENT_CONNECT' => ['Persistent connection', 'checkbox', true, 'Keep the connection open between requests.'],
-		'WP_REDIS_IGBINARY'           => ['igbinary', 'checkbox', null, 'Serialize the values with igbinary. It is on by default when the igbinary extension is loaded.'],
-		'WP_REDIS_COMPRESSION'        => ['Compression', 'checkbox', null, 'Compress the values with zstd, LZ4 or LZF. It is on by default when phpredis supports one of them.'],
-		'WP_REDIS_USE_RELAY'          => ['Relay', 'checkbox', false, 'Connect through Relay when the extension is loaded.'],
-		'WP_REDIS_PERSISTENT_GROUPS'  => ['Protected groups', 'text', 'plugins,themes,counts', 'Comma-separated groups that stay persistent when a plugin makes them non-persistent.'],
+		'redis_host'               => ['Host', 'text', '127.0.0.1', 'A host name, an IP address or the path of a Unix socket.'],
+		'redis_port'               => ['Port', 'number', 6379, ''],
+		'redis_username'           => ['Username', 'text', '', 'The ACL user of Redis 6 and later. Keep it empty to log in with the password only.'],
+		'redis_password'           => ['Password', 'password', '', 'Keep it empty when Redis has no password.'],
+		'redis_database'           => ['Database', 'number', 0, ''],
+		'redis_timeout'            => ['Timeout', 'number', 1, 'The time in seconds to connect and to read a reply.'],
+		'redis_retry_interval'     => ['Retry interval', 'number', 100, 'The time in milliseconds before the next connection attempt.'],
+		'redis_persistent_connect' => ['Persistent connection', 'checkbox', true, 'Keep the connection open between requests.'],
+		'redis_igbinary'           => ['igbinary', 'checkbox', null, 'Serialize the values with igbinary. It is on by default when the igbinary extension is loaded.'],
+		'redis_compression'        => ['Compression', 'checkbox', null, 'Compress the values with zstd, LZ4 or LZF. It is on by default when phpredis supports one of them.'],
+		'redis_use_relay'          => ['Relay', 'checkbox', false, 'Connect through Relay when the extension is loaded.'],
+		'redis_persistent_groups'  => ['Protected groups', 'text', 'plugins,themes,counts', 'Comma-separated groups that stay persistent when a plugin makes them non-persistent.'],
 	],
 	'memcached' => [
-		'memcached_servers'              => ['Servers', 'servers', [['127.0.0.1', 11211]], 'One host:port or Unix socket path on each line.'],
-		'WP_MEMCACHED_CONNECT_TIMEOUT'   => ['Connect timeout', 'number', 250, 'In milliseconds.'],
-		'WP_MEMCACHED_SEND_TIMEOUT'      => ['Send timeout', 'number', 250, 'In milliseconds.'],
-		'WP_MEMCACHED_RECV_TIMEOUT'      => ['Receive timeout', 'number', 250, 'In milliseconds.'],
-		'WP_MEMCACHED_IGBINARY'          => ['igbinary', 'checkbox', null, 'Serialize the values with igbinary. It is on by default when the memcached extension supports igbinary.'],
-		'WP_MEMCACHED_PERSISTENT_GROUPS' => ['Protected groups', 'text', 'plugins,themes,counts', 'Comma-separated groups that stay persistent when a plugin makes them non-persistent.'],
+		'memcached_servers'           => ['Servers', 'servers', [['127.0.0.1', 11211]], 'One host:port or Unix socket path on each line.'],
+		'memcached_connect_timeout'   => ['Connect timeout', 'number', 250, 'In milliseconds.'],
+		'memcached_send_timeout'      => ['Send timeout', 'number', 250, 'In milliseconds.'],
+		'memcached_recv_timeout'      => ['Receive timeout', 'number', 250, 'In milliseconds.'],
+		'memcached_igbinary'          => ['igbinary', 'checkbox', null, 'Serialize the values with igbinary. It is on by default when the memcached extension supports igbinary.'],
+		'memcached_persistent_groups' => ['Protected groups', 'text', 'plugins,themes,counts', 'Comma-separated groups that stay persistent when a plugin makes them non-persistent.'],
 	],
 	'apcu'      => [
-		'WP_APCU_PERSISTENT_GROUPS' => ['Protected groups', 'text', 'plugins,themes,counts', 'Comma-separated groups that stay persistent when a plugin makes them non-persistent.'],
+		'apcu_persistent_groups' => ['Protected groups', 'text', 'plugins,themes,counts', 'Comma-separated groups that stay persistent when a plugin makes them non-persistent.'],
 	],
 ];
 
@@ -89,13 +90,13 @@ function toc_settings_action(): void
 	if (!$test['ok']) {
 		add_settings_error('toc', 'toc_test', 'The settings are not saved. ' . $test['message']);
 	} elseif (!toc_settings_put($settings)) {
-		add_settings_error('toc', 'toc_write', 'Cannot write ' . WP_CONTENT_DIR . '/oc-config.php. Make sure that the web server can write to the wp-content folder.');
+		add_settings_error('toc', 'toc_write', 'Cannot write ' . WP_CONTENT_DIR . '/cache-config.php. Make sure that the web server can write to the wp-content folder.');
 	} else {
 		$installed = ($engine === '' or $settings['handler'] === $engine or toc_dropin_install($settings['handler']));
 
 		// The cache can hold values in another format or from another backend, so the drop-in flushes it before its first read.
 		// The marker comes after the new drop-in, because a request with the old drop-in can take it.
-		@touch(WP_CONTENT_DIR . '/oc-flush');
+		@touch(WP_CONTENT_DIR . '/cache-flush');
 
 		if ($installed) {
 			add_settings_error('toc', 'toc_saved', 'Settings saved.', 'success');
@@ -130,8 +131,8 @@ function toc_settings_page(): void
 		$detected = toc_settings_detect();
 		$settings = toc_settings_get($detected['values'] + ['trace' => !empty($_POST['trace'])]);
 	} else {
-		// Without oc-config.php, the form shows the detected settings
-		$detected = is_file(WP_CONTENT_DIR . '/oc-config.php') ? null : toc_settings_detect();
+		// Without cache-config.php, the form shows the detected settings
+		$detected = is_file(WP_CONTENT_DIR . '/cache-config.php') ? null : toc_settings_detect();
 		$settings = toc_settings_get($detected['values'] ?? null);
 
 		// The Admin Bar menu can enable a handler without a change of the settings
@@ -196,8 +197,9 @@ function toc_settings_page(): void
 		foreach ($fields as $name => [$label, $type, , $description]) {
 			$value = $settings[$name];
 			$global = ($name === 'memcached_servers');
-			$locked = $global ? !empty($GLOBALS['memcached_servers']) : defined($name);
-			$source = $global ? '$memcached_servers' : $name;
+			$constant = 'WP_' . strtoupper($name);
+			$locked = $global ? !empty($GLOBALS['memcached_servers']) : defined($constant);
+			$source = $global ? '$memcached_servers' : $constant;
 			$id = 'toc-' . strtolower(str_replace('_', '-', $name));
 			$attributes = ' id="' . $id . '" name="' . $name . '"' . ($locked ? ' disabled' : '');
 			$text = $locked ? '<code>' . $source . '</code> in <code>wp-config.php</code> sets this value.' : esc_html($description);
@@ -249,7 +251,7 @@ function toc_settings_url(): string
  * The sources are the WP_REDIS_CONFIG array of Object Cache Pro, the $redis_server global of WP Redis, the constants of Redis Object Cache,
  * the $memcached_servers global, the environment variables, the sockets of the host and the default ports. A value from an earlier source wins.
  *
- * @return array The values with the keys of oc-config.php, and the names of the sources that gave them
+ * @return array The values with the keys of cache-config.php, and the names of the sources that gave them
  */
 function toc_settings_detect(): array
 {
@@ -259,14 +261,14 @@ function toc_settings_detect(): array
 
 	// Twee Cache reads the constant itself, but the constant also shows that the host uses Redis
 	if (defined('WP_REDIS_HOST')) {
-		$values['WP_REDIS_HOST'] = WP_REDIS_HOST;
+		$values['redis_host'] = WP_REDIS_HOST;
 		$sources[] = 'WP_REDIS_HOST';
 	}
 
 	// Object Cache Pro. Hosts such as Nexcess also write it.
 	if (defined('WP_REDIS_CONFIG') and is_array(WP_REDIS_CONFIG)) {
 		$config = WP_REDIS_CONFIG;
-		$keys = ['host' => 'WP_REDIS_HOST', 'port' => 'WP_REDIS_PORT', 'database' => 'WP_REDIS_DATABASE', 'username' => 'WP_REDIS_USERNAME', 'password' => 'WP_REDIS_PASSWORD', 'timeout' => 'WP_REDIS_TIMEOUT', 'retry_interval' => 'WP_REDIS_RETRY_INTERVAL', 'prefix' => 'WP_CACHE_KEY_SALT'];
+		$keys = ['host' => 'redis_host', 'port' => 'redis_port', 'database' => 'redis_database', 'username' => 'redis_username', 'password' => 'redis_password', 'timeout' => 'redis_timeout', 'retry_interval' => 'redis_retry_interval', 'prefix' => 'cache_key_salt'];
 
 		foreach ($keys as $key => $name) {
 			if (isset($config[$key]) and is_scalar($config[$key])) {
@@ -275,11 +277,11 @@ function toc_settings_detect(): array
 		}
 
 		if (isset($config['compression'])) {
-			$values += ['WP_REDIS_COMPRESSION' => ($config['compression'] !== 'none')];
+			$values += ['redis_compression' => ($config['compression'] !== 'none')];
 		}
 
 		if (isset($config['serializer'])) {
-			$values += ['WP_REDIS_IGBINARY' => ($config['serializer'] === 'igbinary')];
+			$values += ['redis_igbinary' => ($config['serializer'] === 'igbinary')];
 		}
 
 		$sources[] = 'WP_REDIS_CONFIG';
@@ -290,10 +292,10 @@ function toc_settings_detect(): array
 		$server = $GLOBALS['redis_server'];
 
 		$values += array_filter([
-			'WP_REDIS_HOST'     => $server['host'] ?? null,
-			'WP_REDIS_PORT'     => $server['port'] ?? null,
-			'WP_REDIS_PASSWORD' => $server['auth'] ?? null,
-			'WP_REDIS_DATABASE' => $server['database'] ?? null,
+			'redis_host'     => $server['host'] ?? null,
+			'redis_port'     => $server['port'] ?? null,
+			'redis_password' => $server['auth'] ?? null,
+			'redis_database' => $server['database'] ?? null,
 		], 'is_scalar');
 
 		$sources[] = '$redis_server';
@@ -305,17 +307,17 @@ function toc_settings_detect(): array
 	}
 
 	if (defined('WP_REDIS_SCHEME') and WP_REDIS_SCHEME === 'unix' and defined('WP_REDIS_PATH')) {
-		$values += ['WP_REDIS_HOST' => WP_REDIS_PATH, 'WP_REDIS_PORT' => 0];
+		$values += ['redis_host' => WP_REDIS_PATH, 'redis_port' => 0];
 		$sources[] = 'WP_REDIS_PATH';
 	}
 
 	if (defined('WP_REDIS_PREFIX') and is_string(WP_REDIS_PREFIX)) {
-		$values += ['WP_CACHE_KEY_SALT' => WP_REDIS_PREFIX];
+		$values += ['cache_key_salt' => WP_REDIS_PREFIX];
 		$sources[] = 'WP_REDIS_PREFIX';
 	}
 
 	if (defined('WP_REDIS_SERIALIZER')) {
-		$values += ['WP_REDIS_IGBINARY' => in_array(WP_REDIS_SERIALIZER, ['igbinary', 2], true)];
+		$values += ['redis_igbinary' => in_array(WP_REDIS_SERIALIZER, ['igbinary', 2], true)];
 		$sources[] = 'WP_REDIS_SERIALIZER';
 	}
 
@@ -330,7 +332,7 @@ function toc_settings_detect(): array
 		if ($variable === 'REDIS_URL') {
 			$urls[$variable] = $value;
 		} else {
-			$values += [str_replace(['REDIS_', 'CACHE_'], 'WP_REDIS_', $variable) => $value];
+			$values += [str_replace(['REDIS_', 'CACHE_'], 'redis_', $variable) => $value];
 			$sources[] = $variable;
 		}
 	}
@@ -349,11 +351,11 @@ function toc_settings_detect(): array
 		$database = $unix ? ($query['database'] ?? null) : (trim($parts['path'] ?? '', '/') ?: ($query['database'] ?? null));
 
 		$url_values = [
-			'WP_REDIS_HOST'     => $unix ? ($parts['path'] ?? null) : ($parts['host'] ?? null),
-			'WP_REDIS_PORT'     => $unix ? 0 : ($parts['port'] ?? null),
-			'WP_REDIS_USERNAME' => isset($parts['user'], $parts['pass']) ? urldecode($parts['user']) : null,
-			'WP_REDIS_PASSWORD' => isset($parts['pass']) ? urldecode($parts['pass']) : ($query['password'] ?? null),
-			'WP_REDIS_DATABASE' => is_numeric($database) ? (int) $database : null,
+			'redis_host'     => $unix ? ($parts['path'] ?? null) : ($parts['host'] ?? null),
+			'redis_port'     => $unix ? 0 : ($parts['port'] ?? null),
+			'redis_username' => isset($parts['user'], $parts['pass']) ? urldecode($parts['user']) : null,
+			'redis_password' => isset($parts['pass']) ? urldecode($parts['pass']) : ($query['password'] ?? null),
+			'redis_database' => is_numeric($database) ? (int) $database : null,
 		];
 
 		foreach ($url_values as $name => $value) {
@@ -366,7 +368,7 @@ function toc_settings_detect(): array
 	}
 
 	// The sockets of the host. On Nexcess, the name of the Redis socket has the name of the account from /chroot/home/{account}/.
-	if (!isset($values['WP_REDIS_HOST'])) {
+	if (!isset($values['redis_host'])) {
 		$sockets = ['/var/run/redis/redis.sock', '/var/run/redis/redis-server.sock', '/run/redis/redis-server.sock', '/tmp/redis.sock'];
 
 		if (preg_match('#^/chroot/home/([^/]+)/#', ABSPATH, $match)) {
@@ -376,7 +378,7 @@ function toc_settings_detect(): array
 		foreach ($sockets as $socket) {
 			// open_basedir can block the path, so the warning is hidden
 			if (@file_exists($socket)) {
-				$values += ['WP_REDIS_HOST' => $socket, 'WP_REDIS_PORT' => 0];
+				$values += ['redis_host' => $socket, 'redis_port' => 0];
 				$sources[] = $socket;
 				break;
 			}
@@ -407,9 +409,9 @@ function toc_settings_detect(): array
 	}
 
 	// The default ports, such as Memcached on SiteGround
-	if (!isset($values['WP_REDIS_HOST']) and !isset($values['memcached_servers'])) {
+	if (!isset($values['redis_host']) and !isset($values['memcached_servers'])) {
 		$ports = [
-			6379  => ['WP_REDIS_HOST' => '127.0.0.1', 'WP_REDIS_PORT' => 6379],
+			6379  => ['redis_host' => '127.0.0.1', 'redis_port' => 6379],
 			11211 => ['memcached_servers' => [['127.0.0.1', 11211]]],
 		];
 
@@ -425,7 +427,7 @@ function toc_settings_detect(): array
 		}
 	}
 
-	if (isset($values['WP_REDIS_HOST']) and extension_loaded('redis')) {
+	if (isset($values['redis_host']) and extension_loaded('redis')) {
 		$values['handler'] = 'redis';
 	} elseif (isset($values['memcached_servers']) and extension_loaded('memcached')) {
 		$values['handler'] = 'memcached';
@@ -438,7 +440,7 @@ function toc_settings_detect(): array
 /**
  * Get the settings with their defaults. A constant in wp-config.php wins over a setting.
  *
- * When oc-config.php does not exist, the detected settings replace it.
+ * When cache-config.php does not exist, the detected settings replace it.
  *
  * @param array|null $input The values of the form or of the detection, or null for the saved settings
  *
@@ -446,7 +448,7 @@ function toc_settings_detect(): array
  */
 function toc_settings_get(?array $input = null): array
 {
-	$config_file = WP_CONTENT_DIR . '/oc-config.php';
+	$config_file = WP_CONTENT_DIR . '/cache-config.php';
 	$values = $input ?? (is_file($config_file) ? (array) include $config_file : toc_settings_detect()['values']);
 	$handler = (string) ($values['handler'] ?? '');
 
@@ -457,9 +459,9 @@ function toc_settings_get(?array $input = null): array
 
 	// The switches with the default null are on when the server supports them, as in the drop-ins
 	$supported = [
-		'WP_REDIS_IGBINARY'     => (defined('Redis::SERIALIZER_IGBINARY') and extension_loaded('igbinary')),
-		'WP_REDIS_COMPRESSION'  => (defined('Redis::COMPRESSION_ZSTD') or defined('Redis::COMPRESSION_LZ4') or defined('Redis::COMPRESSION_LZF')),
-		'WP_MEMCACHED_IGBINARY' => (defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')),
+		'redis_igbinary'     => (defined('Redis::SERIALIZER_IGBINARY') and extension_loaded('igbinary')),
+		'redis_compression'  => (defined('Redis::COMPRESSION_ZSTD') or defined('Redis::COMPRESSION_LZ4') or defined('Redis::COMPRESSION_LZF')),
+		'memcached_igbinary' => (defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')),
 	];
 
 	foreach (TOC_SETTINGS as $fields) {
@@ -499,8 +501,10 @@ function toc_settings_get(?array $input = null): array
 				$value = trim((string) $value);
 			}
 
-			if (defined($name)) {
-				$value = constant($name);
+			$constant = 'WP_' . strtoupper($name);
+
+			if (defined($constant)) {
+				$value = constant($constant);
 			}
 
 			$settings[$name] = $value;
@@ -512,7 +516,7 @@ function toc_settings_get(?array $input = null): array
 
 
 /**
- * Write the settings to wp-content/oc-config.php
+ * Write the settings to wp-content/cache-config.php
  *
  * The file is replaced with a rename, so a request never loads a partly written file. The values of constants stay in wp-config.php only.
  *
@@ -523,12 +527,12 @@ function toc_settings_get(?array $input = null): array
 function toc_settings_put(array $settings): bool
 {
 	foreach ($settings as $name => $value) {
-		if (defined($name) or ($name === 'memcached_servers' and !empty($GLOBALS['memcached_servers']))) {
+		if (defined('WP_' . strtoupper($name)) or ($name === 'memcached_servers' and !empty($GLOBALS['memcached_servers']))) {
 			unset($settings[$name]);
 		}
 	}
 
-	$config_file = WP_CONTENT_DIR . '/oc-config.php';
+	$config_file = WP_CONTENT_DIR . '/cache-config.php';
 	$temp_file = $config_file . '.' . uniqid() . '.tmp';
 	$code = "<?php\n// The Cache Settings page of Twee Cache writes this file. A constant in wp-config.php wins over a value here.\nreturn " . var_export($settings, true) . ";\n";
 

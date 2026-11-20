@@ -2,7 +2,7 @@
 /**
  * Build the plugin ZIP and publish it as a GitHub release
  *
- * composer zip       Builds build/twee-cache-{version}.zip from the plugin/ directory at HEAD
+ * composer zip       Builds build/twee-cache-{version}.zip from the plugin/ directory, with the uncommitted changes
  * composer release   Builds the ZIP and publishes release v{version} with its section of CHANGELOG.md as the notes
  */
 
@@ -40,18 +40,12 @@ function release_run(string $command): string
 }
 
 
-// Sites compare the plugin header with the release tag, and the plugin replaces a drop-in when its version changes
-$versions = [];
+// Sites compare the plugin header with the release tag
+preg_match('/^\s*\*\s*Version:\s*(\S+)/m', (string) file_get_contents('plugin/twee-cache.php'), $header);
+$version = $header[1] ?? '';
 
-foreach (['twee-cache.php', 'handlers/redis.php', 'handlers/memcached.php', 'handlers/apcu.php'] as $file) {
-	preg_match('/^\s*\*\s*Version:\s*(\S+)/m', (string) file_get_contents('plugin/' . $file), $header);
-	$versions[$file] = $header[1] ?? '';
-}
-
-$version = $versions['twee-cache.php'];
-
-if (!$version or count(array_unique($versions)) > 1) {
-	release_fail("The Version headers in plugin/ do not match:\n" . print_r($versions, true));
+if (!$version) {
+	release_fail('plugin/twee-cache.php has no Version header.');
 }
 
 $tag = 'v' . $version;
@@ -86,7 +80,7 @@ if ($publish) {
 	}
 
 	if (release_run('git tag --list ' . $tag) !== '') {
-		release_fail("Release $tag already exists. Change the Version headers in plugin/ first.");
+		release_fail("Release $tag already exists. Change the Version header in plugin/twee-cache.php first.");
 	}
 }
 
@@ -95,8 +89,11 @@ if (!is_dir('build')) {
 	mkdir('build');
 }
 
-release_run("git archive --format=zip --prefix=twee-cache/ -o $zip HEAD:plugin");
-echo "Built $zip from HEAD." . PHP_EOL;
+// A local build takes the uncommitted changes of the tracked files too. "git stash create" makes a commit of them and does not change the files.
+$tree = $publish ? 'HEAD' : (release_run('git stash create') ?: 'HEAD');
+
+release_run("git archive --format=zip --prefix=twee-cache/ -o $zip $tree:plugin");
+echo "Built $zip from " . ($tree === 'HEAD' ? 'HEAD' : 'the working tree') . '.' . PHP_EOL;
 
 if ($publish) {
 	file_put_contents($notes, $changes . "\n");

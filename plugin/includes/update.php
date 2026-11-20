@@ -26,12 +26,11 @@ function toc_update_dropin($upgrader, array $options): void
 		return;
 	}
 
-	$installed = get_file_data(WP_CONTENT_DIR . '/object-cache.php', ['version' => 'Version'])['version'];
 	$source_file = dirname(__DIR__) . '/handlers/' . $engine . '.php';
 
 	// A new version can change the keys, so the new drop-in flushes the cache before its first read
-	if (is_file($source_file) and $installed !== get_file_data($source_file, ['version' => 'Version'])['version'] and toc_dropin_install($engine)) {
-		@touch(WP_CONTENT_DIR . '/oc-flush');
+	if (is_file($source_file) and md5_file($source_file) !== md5_file(WP_CONTENT_DIR . '/object-cache.php') and toc_dropin_install($engine)) {
+		@touch(WP_CONTENT_DIR . '/cache-flush');
 	}
 }
 

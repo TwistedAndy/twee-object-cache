@@ -30,7 +30,16 @@ add_filter('update_plugins_github.com', 'toc_update_check', 10, 3);
 add_filter('plugins_api', 'toc_update_details', 10, 3);
 
 /**
- * Replace an older Twee drop-in on activation. An update from the twee-object-cache folder deactivates the plugin and keeps the old drop-in.
+ * Add the Settings link in the Plugins list. On multisite, the page is in the Network Admin.
+ */
+add_filter((is_multisite() ? 'network_admin_' : '') . 'plugin_action_links_' . plugin_basename(__FILE__), function(array $links): array {
+	array_unshift($links, '<a href="' . esc_url(toc_settings_url()) . '">Settings</a>');
+
+	return $links;
+});
+
+/**
+ * Replace the drop-in of an older version on activation
  */
 register_activation_hook(__FILE__, function(): void {
 	toc_update_dropin(null, ['type' => 'plugin']);

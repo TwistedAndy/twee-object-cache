@@ -1,12 +1,4 @@
 <?php
-/**
- * Plugin Name: Twee Memcached Cache
- * Plugin URI: https://github.com/TwistedAndy/twee-cache
- * Description: A high-performance, lightweight Memcached object cache for WordPress and WooCommerce.
- * Version: 1.3.0
- * Author: Andrii Toniievych
- * Author URI: https://www.linkedin.com/in/toniievych/
- */
 
 if (!defined('ABSPATH')) {
 	exit;
@@ -181,6 +173,11 @@ function wp_cache_reset()
 #[AllowDynamicProperties]
 class WP_Object_Cache
 {
+	/**
+	 * The engine of this drop-in. The Twee Cache plugin reads it to find its drop-in.
+	 */
+	const TWEE_CACHE = 'memcached';
+
 	public int $cache_hits = 0;
 
 	public int $cache_misses = 0;
@@ -241,19 +238,21 @@ class WP_Object_Cache
 
 	public function __construct()
 	{
-		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting.
-		$config_file = __DIR__ . '/oc-config.php';
+		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting. The constant of a key is WP_ and the key in upper case.
+		$config_file = __DIR__ . '/cache-config.php';
 		$config = is_file($config_file) ? (array) include $config_file : [];
 
-		foreach (['WP_MEMCACHED_PERSISTENT_GROUPS', 'WP_CACHE_KEY_SALT', 'WP_MEMCACHED_CONNECT_TIMEOUT', 'WP_MEMCACHED_SEND_TIMEOUT', 'WP_MEMCACHED_RECV_TIMEOUT', 'WP_MEMCACHED_IGBINARY'] as $name) {
-			if (defined($name)) {
-				$config[$name] = constant($name);
+		foreach (['memcached_persistent_groups', 'cache_key_salt', 'memcached_connect_timeout', 'memcached_send_timeout', 'memcached_recv_timeout', 'memcached_igbinary'] as $key) {
+			$constant = 'WP_' . strtoupper($key);
+
+			if (defined($constant)) {
+				$config[$key] = constant($constant);
 			}
 		}
 
 		$this->debug = !empty($config['trace']);
 
-		$groups = $config['WP_MEMCACHED_PERSISTENT_GROUPS'] ?? null;
+		$groups = $config['memcached_persistent_groups'] ?? null;
 
 		if ($groups !== null and $groups !== '') {
 			$groups = is_string($groups) ? explode(',', $groups) : $groups;
@@ -273,7 +272,7 @@ class WP_Object_Cache
 		}
 
 		// The host name changes between web, WP-CLI and multisite requests, so the default salt uses the database
-		$this->key_salt = (string) ($config['WP_CACHE_KEY_SALT'] ?? '');
+		$this->key_salt = (string) ($config['cache_key_salt'] ?? '');
 
 		if ($this->key_salt === '') {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
@@ -310,9 +309,9 @@ class WP_Object_Cache
 			}
 		}
 
-		$connect_timeout = (int) ($config['WP_MEMCACHED_CONNECT_TIMEOUT'] ?? 250);
-		$send_timeout = (int) ($config['WP_MEMCACHED_SEND_TIMEOUT'] ?? 250);
-		$recv_timeout = (int) ($config['WP_MEMCACHED_RECV_TIMEOUT'] ?? 250);
+		$connect_timeout = (int) ($config['memcached_connect_timeout'] ?? 250);
+		$send_timeout = (int) ($config['memcached_send_timeout'] ?? 250);
+		$recv_timeout = (int) ($config['memcached_recv_timeout'] ?? 250);
 
 		if ($connect_timeout <= 0) {
 			$connect_timeout = 250;
@@ -326,7 +325,7 @@ class WP_Object_Cache
 			$recv_timeout = 250;
 		}
 
-		if (($config['WP_MEMCACHED_IGBINARY'] ?? true) and defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
+		if (($config['memcached_igbinary'] ?? true) and defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
 			$this->serializer = 'igbinary_serialize';
 			$this->unserializer = 'igbinary_unserialize';
 			$serializer = Memcached::SERIALIZER_IGBINARY;
@@ -391,7 +390,7 @@ class WP_Object_Cache
 		}
 
 		// Flush stale cache if the server was previously offline
-		$flag_file = __DIR__ . '/oc-flush';
+		$flag_file = __DIR__ . '/cache-flush';
 
 		if ($this->active) {
 			if (file_exists($flag_file) and $this->flush()) {
@@ -1202,8 +1201,8 @@ class WP_Object_Cache
 		if (!$active) {
 			$this->active = false;
 
-			if (!file_exists(__DIR__ . '/oc-flush')) {
-				@touch(__DIR__ . '/oc-flush');
+			if (!file_exists(__DIR__ . '/cache-flush')) {
+				@touch(__DIR__ . '/cache-flush');
 			}
 		}
 

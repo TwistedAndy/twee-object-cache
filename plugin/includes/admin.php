@@ -46,15 +46,15 @@ function toc_admin_action(): void
 			wp_die(esc_html($test['message']) . ' Check the settings on the Cache Settings page.', 'Object Cache', ['back_link' => true]);
 		}
 
-		// The drop-in reads oc-config.php only, so the detected settings must be saved there first
-		$config_file = WP_CONTENT_DIR . '/oc-config.php';
+		// The drop-in reads cache-config.php only, so the detected settings must be saved there first
+		$config_file = WP_CONTENT_DIR . '/cache-config.php';
 
 		if (!is_file($config_file) and !toc_settings_put(['handler' => $engine] + $settings)) {
 			wp_die('Cannot write ' . esc_html($config_file) . '. Make sure that the web server can write to the wp-content folder.', 'Object Cache', ['back_link' => true]);
 		}
 
 		// The cache still holds the values from before the drop-in was removed, so the drop-in flushes it before the first read
-		@touch(WP_CONTENT_DIR . '/oc-flush');
+		@touch(WP_CONTENT_DIR . '/cache-flush');
 
 		if (!toc_dropin_install($engine)) {
 			wp_die('Cannot write ' . esc_html($dropin_file) . '. Make sure that the web server can write to the wp-content folder.', 'Object Cache', ['back_link' => true]);

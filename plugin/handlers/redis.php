@@ -1,12 +1,4 @@
 <?php
-/**
- * Plugin Name: Twee Redis Cache
- * Plugin URI: https://github.com/TwistedAndy/twee-cache
- * Description: A high-performance, lightweight Redis object cache for WordPress and WooCommerce.
- * Version: 1.3.0
- * Author: Andrii Toniievych
- * Author URI: https://www.linkedin.com/in/toniievych/
- */
 
 if (!defined('ABSPATH')) {
 	exit;
@@ -182,6 +174,11 @@ function wp_cache_reset()
 class WP_Object_Cache
 {
 
+	/**
+	 * The engine of this drop-in. The Twee Cache plugin reads it to find its drop-in.
+	 */
+	const TWEE_CACHE = 'redis';
+
 	public int $cache_hits = 0;
 
 	public int $cache_misses = 0;
@@ -244,19 +241,21 @@ class WP_Object_Cache
 
 	public function __construct()
 	{
-		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting.
-		$config_file = __DIR__ . '/oc-config.php';
+		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting. The constant of a key is WP_ and the key in upper case.
+		$config_file = __DIR__ . '/cache-config.php';
 		$config = is_file($config_file) ? (array) include $config_file : [];
 
-		foreach (['WP_REDIS_PERSISTENT_GROUPS', 'WP_CACHE_KEY_SALT', 'WP_REDIS_USE_RELAY', 'WP_REDIS_HOST', 'WP_REDIS_PORT', 'WP_REDIS_TIMEOUT', 'WP_REDIS_RETRY_INTERVAL', 'WP_REDIS_DATABASE', 'WP_REDIS_PASSWORD', 'WP_REDIS_USERNAME', 'WP_REDIS_PERSISTENT_CONNECT', 'WP_REDIS_IGBINARY', 'WP_REDIS_COMPRESSION'] as $name) {
-			if (defined($name)) {
-				$config[$name] = constant($name);
+		foreach (['redis_persistent_groups', 'cache_key_salt', 'redis_use_relay', 'redis_host', 'redis_port', 'redis_timeout', 'redis_retry_interval', 'redis_database', 'redis_password', 'redis_username', 'redis_persistent_connect', 'redis_igbinary', 'redis_compression'] as $key) {
+			$constant = 'WP_' . strtoupper($key);
+
+			if (defined($constant)) {
+				$config[$key] = constant($constant);
 			}
 		}
 
 		$this->debug = !empty($config['trace']);
 
-		$groups = $config['WP_REDIS_PERSISTENT_GROUPS'] ?? null;
+		$groups = $config['redis_persistent_groups'] ?? null;
 
 		if ($groups !== null and $groups !== '') {
 			$groups = is_string($groups) ? explode(',', $groups) : $groups;
@@ -276,13 +275,13 @@ class WP_Object_Cache
 		}
 
 		// The host name changes between web, WP-CLI and multisite requests, so the default salt uses the database
-		$this->key_salt = (string) ($config['WP_CACHE_KEY_SALT'] ?? '');
+		$this->key_salt = (string) ($config['cache_key_salt'] ?? '');
 
 		if ($this->key_salt === '') {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
 		}
 
-		if (($config['WP_REDIS_USE_RELAY'] ?? false) and class_exists('Relay\Relay')) {
+		if (($config['redis_use_relay'] ?? false) and class_exists('Relay\Relay')) {
 			$this->redis = new Relay\Relay();
 		} else {
 			$this->redis = new Redis();
@@ -290,15 +289,15 @@ class WP_Object_Cache
 
 		$this->field_expiry = method_exists($this->redis, 'hExpireAt');
 
-		$host = (string) ($config['WP_REDIS_HOST'] ?? '127.0.0.1');
-		$port = (int) ($config['WP_REDIS_PORT'] ?? 6379);
+		$host = (string) ($config['redis_host'] ?? '127.0.0.1');
+		$port = (int) ($config['redis_port'] ?? 6379);
 
-		$timeout = (float) ($config['WP_REDIS_TIMEOUT'] ?? 1);
-		$retry_interval = (int) ($config['WP_REDIS_RETRY_INTERVAL'] ?? 100);
+		$timeout = (float) ($config['redis_timeout'] ?? 1);
+		$retry_interval = (int) ($config['redis_retry_interval'] ?? 100);
 
-		$database = (int) ($config['WP_REDIS_DATABASE'] ?? 0);
-		$password = $config['WP_REDIS_PASSWORD'] ?? '';
-		$username = (string) ($config['WP_REDIS_USERNAME'] ?? '');
+		$database = (int) ($config['redis_database'] ?? 0);
+		$password = $config['redis_password'] ?? '';
+		$username = (string) ($config['redis_username'] ?? '');
 
 		// A Redis 6 ACL user logs in with the name and the password
 		if ($username !== '' and is_string($password) and $password !== '') {
@@ -311,7 +310,7 @@ class WP_Object_Cache
 				$port = 0;
 			}
 
-			if ($config['WP_REDIS_PERSISTENT_CONNECT'] ?? true) {
+			if ($config['redis_persistent_connect'] ?? true) {
 				/*
 				 * A persistent connection keeps its database and its login between requests.
 				 * Each database and password gets a separate connection, so that a site cannot use the state of other sites.
@@ -336,7 +335,7 @@ class WP_Object_Cache
 				throw new Exception('Cannot select database ' . $database . ': ' . $this->redis->getLastError());
 			}
 
-			if (($config['WP_REDIS_IGBINARY'] ?? true) and defined('Redis::SERIALIZER_IGBINARY') and extension_loaded('igbinary')) {
+			if (($config['redis_igbinary'] ?? true) and defined('Redis::SERIALIZER_IGBINARY') and extension_loaded('igbinary')) {
 				$this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_IGBINARY);
 				$this->key_format = 'i';
 			} else {
@@ -344,7 +343,7 @@ class WP_Object_Cache
 				$this->key_format = 'p';
 			}
 
-			if ($config['WP_REDIS_COMPRESSION'] ?? true) {
+			if ($config['redis_compression'] ?? true) {
 				if (defined('Redis::COMPRESSION_ZSTD')) {
 					$this->redis->setOption(Redis::OPT_COMPRESSION, Redis::COMPRESSION_ZSTD);
 					$this->key_format .= 'z';
@@ -358,7 +357,7 @@ class WP_Object_Cache
 			}
 
 			// Flush stale cache if the server was previously offline
-			$flag_file = __DIR__ . '/oc-flush';
+			$flag_file = __DIR__ . '/cache-flush';
 
 			if (file_exists($flag_file) and $this->flush()) {
 				@unlink($flag_file);
@@ -368,7 +367,7 @@ class WP_Object_Cache
 			$error = $e->getMessage();
 
 			// Mark the cache as offline to trigger a flush on next reconnect
-			$flag_file = __DIR__ . '/oc-flush';
+			$flag_file = __DIR__ . '/cache-flush';
 
 			if (!file_exists($flag_file)) {
 				@touch($flag_file);
@@ -1136,8 +1135,8 @@ class WP_Object_Cache
 		if ($flush) {
 			$this->active = false;
 
-			if (!file_exists(__DIR__ . '/oc-flush')) {
-				@touch(__DIR__ . '/oc-flush');
+			if (!file_exists(__DIR__ . '/cache-flush')) {
+				@touch(__DIR__ . '/cache-flush');
 			}
 		}
 

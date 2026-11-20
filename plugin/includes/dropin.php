@@ -11,22 +11,18 @@ if (!defined('ABSPATH')) {
 /**
  * Get the engine of the installed drop-in
  *
+ * The loaded drop-in of the request names its engine in the WP_Object_Cache::TWEE_CACHE constant.
+ *
  * @return string The engine (redis, memcached or apcu), or an empty string when there is no drop-in or another plugin installed it
  */
 function toc_dropin_engine(): string
 {
-	$dropin_file = WP_CONTENT_DIR . '/object-cache.php';
-
-	if (!is_file($dropin_file)) {
+	// The class stays in memory when the drop-in is removed during the request
+	if (!is_file(WP_CONTENT_DIR . '/object-cache.php') or !defined('WP_Object_Cache::TWEE_CACHE')) {
 		return '';
 	}
 
-	return match (get_file_data($dropin_file, ['name' => 'Plugin Name'])['name']) {
-		'Twee Redis Cache', 'Twee Redis Object Cache' => 'redis',
-		'Twee Memcached Cache', 'Twee Memcached Object Cache' => 'memcached',
-		'Twee APCu Cache', 'Twee APCu Object Cache' => 'apcu',
-		default => '',
-	};
+	return WP_Object_Cache::TWEE_CACHE;
 }
 
 
@@ -56,7 +52,7 @@ function toc_dropin_install(string $engine): bool
 
 	// Version 1.1 and older name the flush marker .ocflush
 	if (is_file(WP_CONTENT_DIR . '/.ocflush')) {
-		@rename(WP_CONTENT_DIR . '/.ocflush', WP_CONTENT_DIR . '/oc-flush');
+		@rename(WP_CONTENT_DIR . '/.ocflush', WP_CONTENT_DIR . '/cache-flush');
 	}
 
 	// OPcache can keep the old drop-in when it does not examine the file time
@@ -88,20 +84,20 @@ function toc_dropin_test(string $engine, array $settings): array
 				return ['ok' => false, 'message' => 'The redis PHP extension is not loaded.'];
 			}
 
-			$host = (string) $settings['WP_REDIS_HOST'];
-			$port = (str_starts_with($host, 'unix://') or str_starts_with($host, '/')) ? 0 : (int) $settings['WP_REDIS_PORT'];
-			$password = $settings['WP_REDIS_PASSWORD'] ?: '';
-			$username = (string) $settings['WP_REDIS_USERNAME'];
+			$host = (string) $settings['redis_host'];
+			$port = (str_starts_with($host, 'unix://') or str_starts_with($host, '/')) ? 0 : (int) $settings['redis_port'];
+			$password = $settings['redis_password'] ?: '';
+			$username = (string) $settings['redis_username'];
 
 			// A Redis 6 ACL user logs in with the name and the password
 			if ($username !== '' and is_string($password) and $password !== '') {
 				$password = [$username, $password];
 			}
 
-			$database = (int) $settings['WP_REDIS_DATABASE'];
+			$database = (int) $settings['redis_database'];
 			$redis = new Redis();
 
-			if (!$redis->connect($host, $port, (float) $settings['WP_REDIS_TIMEOUT'])) {
+			if (!$redis->connect($host, $port, (float) $settings['redis_timeout'])) {
 				return ['ok' => false, 'message' => 'Cannot connect to Redis at ' . $host . ($port ? ':' . $port : '') . '.'];
 			}
 
@@ -130,9 +126,9 @@ function toc_dropin_test(string $engine, array $settings): array
 
 			$memcached->setOption(Memcached::OPT_NO_BLOCK, false);
 			$memcached->setOption(Memcached::OPT_NOREPLY, false);
-			$memcached->setOption(Memcached::OPT_CONNECT_TIMEOUT, max(1, (int) $settings['WP_MEMCACHED_CONNECT_TIMEOUT']));
-			$memcached->setOption(Memcached::OPT_SEND_TIMEOUT, max(0, (int) $settings['WP_MEMCACHED_SEND_TIMEOUT']) * 1000);
-			$memcached->setOption(Memcached::OPT_RECV_TIMEOUT, max(0, (int) $settings['WP_MEMCACHED_RECV_TIMEOUT']) * 1000);
+			$memcached->setOption(Memcached::OPT_CONNECT_TIMEOUT, max(1, (int) $settings['memcached_connect_timeout']));
+			$memcached->setOption(Memcached::OPT_SEND_TIMEOUT, max(0, (int) $settings['memcached_send_timeout']) * 1000);
+			$memcached->setOption(Memcached::OPT_RECV_TIMEOUT, max(0, (int) $settings['memcached_recv_timeout']) * 1000);
 			$memcached->addServers($settings['memcached_servers']);
 
 			$start = hrtime(true);
