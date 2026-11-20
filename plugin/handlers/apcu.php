@@ -3,7 +3,7 @@
  * Plugin Name: Twee APCu Cache
  * Plugin URI: https://github.com/TwistedAndy/twee-cache
  * Description: A high-performance, lightweight APCu object cache for WordPress and WooCommerce.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
@@ -229,12 +229,18 @@ class WP_Object_Cache {
 	public function __construct()
 	{
 		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting.
-		$config = is_file(__DIR__ . '/oc-config.php') ? (array) include __DIR__ . '/oc-config.php' : [];
-		$setting = fn(string $name, mixed $default = null): mixed => defined($name) ? constant($name) : ($config[$name] ?? $default);
+		$config_file = __DIR__ . '/oc-config.php';
+		$config = is_file($config_file) ? (array) include $config_file : [];
+
+		foreach (['WP_APCU_PERSISTENT_GROUPS', 'WP_CACHE_KEY_SALT'] as $name) {
+			if (defined($name)) {
+				$config[$name] = constant($name);
+			}
+		}
 
 		$this->debug = !empty($config['trace']);
 
-		$groups = $setting('WP_APCU_PERSISTENT_GROUPS');
+		$groups = $config['WP_APCU_PERSISTENT_GROUPS'] ?? null;
 
 		if ($groups !== null and $groups !== '') {
 			$groups = is_string($groups) ? explode(',', $groups) : $groups;
@@ -254,7 +260,7 @@ class WP_Object_Cache {
 		}
 
 		// The host name changes between multisite hosts, so the default salt uses the database
-		$this->key_salt = (string) $setting('WP_CACHE_KEY_SALT', '');
+		$this->key_salt = (string) ($config['WP_CACHE_KEY_SALT'] ?? '');
 
 		if ($this->key_salt === '') {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
@@ -266,6 +272,13 @@ class WP_Object_Cache {
 		}
 
 		$this->active = (function_exists('apcu_enabled') and apcu_enabled());
+
+		// The Cache Settings page and failed writes of the other drop-ins ask for a flush with the marker
+		$flag_file = __DIR__ . '/oc-flush';
+
+		if ($this->active and file_exists($flag_file) and $this->flush()) {
+			@unlink($flag_file);
+		}
 
 		if (!$this->active and function_exists('add_action')) {
 			add_action('admin_notices', function() {

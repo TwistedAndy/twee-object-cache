@@ -90,7 +90,14 @@ function toc_dropin_test(string $engine, array $settings): array
 
 			$host = (string) $settings['WP_REDIS_HOST'];
 			$port = (str_starts_with($host, 'unix://') or str_starts_with($host, '/')) ? 0 : (int) $settings['WP_REDIS_PORT'];
-			$password = $settings['WP_REDIS_PASSWORD'];
+			$password = $settings['WP_REDIS_PASSWORD'] ?: '';
+			$username = (string) $settings['WP_REDIS_USERNAME'];
+
+			// A Redis 6 ACL user logs in with the name and the password
+			if ($username !== '' and is_string($password) and $password !== '') {
+				$password = [$username, $password];
+			}
+
 			$database = (int) $settings['WP_REDIS_DATABASE'];
 			$redis = new Redis();
 
@@ -129,8 +136,16 @@ function toc_dropin_test(string $engine, array $settings): array
 			$memcached->addServers($settings['memcached_servers']);
 
 			$start = hrtime(true);
-			$versions = array_filter((array) $memcached->getVersion(), fn($version) => $version and $version !== '255.255.255');
+			$response = (array) $memcached->getVersion();
 			$latency = hrtime(true) - $start;
+			$versions = [];
+
+			// A server that does not answer has the version 255.255.255
+			foreach ($response as $server => $version) {
+				if ($version and $version !== '255.255.255') {
+					$versions[$server] = $version;
+				}
+			}
 
 			if (!$versions) {
 				return ['ok' => false, 'message' => 'Cannot connect to Memcached: ' . $memcached->getResultMessage()];

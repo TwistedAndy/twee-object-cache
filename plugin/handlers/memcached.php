@@ -3,7 +3,7 @@
  * Plugin Name: Twee Memcached Cache
  * Plugin URI: https://github.com/TwistedAndy/twee-cache
  * Description: A high-performance, lightweight Memcached object cache for WordPress and WooCommerce.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
@@ -242,12 +242,18 @@ class WP_Object_Cache
 	public function __construct()
 	{
 		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting.
-		$config = is_file(__DIR__ . '/oc-config.php') ? (array) include __DIR__ . '/oc-config.php' : [];
-		$setting = fn(string $name, mixed $default = null): mixed => defined($name) ? constant($name) : ($config[$name] ?? $default);
+		$config_file = __DIR__ . '/oc-config.php';
+		$config = is_file($config_file) ? (array) include $config_file : [];
+
+		foreach (['WP_MEMCACHED_PERSISTENT_GROUPS', 'WP_CACHE_KEY_SALT', 'WP_MEMCACHED_CONNECT_TIMEOUT', 'WP_MEMCACHED_SEND_TIMEOUT', 'WP_MEMCACHED_RECV_TIMEOUT', 'WP_MEMCACHED_IGBINARY'] as $name) {
+			if (defined($name)) {
+				$config[$name] = constant($name);
+			}
+		}
 
 		$this->debug = !empty($config['trace']);
 
-		$groups = $setting('WP_MEMCACHED_PERSISTENT_GROUPS');
+		$groups = $config['WP_MEMCACHED_PERSISTENT_GROUPS'] ?? null;
 
 		if ($groups !== null and $groups !== '') {
 			$groups = is_string($groups) ? explode(',', $groups) : $groups;
@@ -267,7 +273,7 @@ class WP_Object_Cache
 		}
 
 		// The host name changes between web, WP-CLI and multisite requests, so the default salt uses the database
-		$this->key_salt = (string) $setting('WP_CACHE_KEY_SALT', '');
+		$this->key_salt = (string) ($config['WP_CACHE_KEY_SALT'] ?? '');
 
 		if ($this->key_salt === '') {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
@@ -291,9 +297,22 @@ class WP_Object_Cache
 			];
 		}
 
-		$connect_timeout = (int) $setting('WP_MEMCACHED_CONNECT_TIMEOUT', 250);
-		$send_timeout = (int) $setting('WP_MEMCACHED_SEND_TIMEOUT', 250);
-		$recv_timeout = (int) $setting('WP_MEMCACHED_RECV_TIMEOUT', 250);
+		// Other plugins and hosts such as WP Engine put the servers in buckets, as "host:port" or "unix://path" strings
+		if (!array_is_list($servers)) {
+			$servers = (array) ($servers['default'] ?? reset($servers));
+		}
+
+		foreach ($servers as $index => $server) {
+			if (is_string($server)) {
+				// A Unix socket has no port
+				$server = preg_replace('#^unix://#', '', $server);
+				$servers[$index] = str_starts_with($server, '/') ? [$server, 0] : [strtok($server, ':'), (int) (strtok(':') ?: 11211)];
+			}
+		}
+
+		$connect_timeout = (int) ($config['WP_MEMCACHED_CONNECT_TIMEOUT'] ?? 250);
+		$send_timeout = (int) ($config['WP_MEMCACHED_SEND_TIMEOUT'] ?? 250);
+		$recv_timeout = (int) ($config['WP_MEMCACHED_RECV_TIMEOUT'] ?? 250);
 
 		if ($connect_timeout <= 0) {
 			$connect_timeout = 250;
@@ -307,7 +326,7 @@ class WP_Object_Cache
 			$recv_timeout = 250;
 		}
 
-		if ($setting('WP_MEMCACHED_IGBINARY', false) and defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
+		if (($config['WP_MEMCACHED_IGBINARY'] ?? true) and defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
 			$this->serializer = 'igbinary_serialize';
 			$this->unserializer = 'igbinary_unserialize';
 			$serializer = Memcached::SERIALIZER_IGBINARY;

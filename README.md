@@ -21,7 +21,7 @@ Twee Cache can be installed as a standard WordPress plugin or as a manual drop-i
 - When another plugin installed `wp-content/object-cache.php`, the menu shows **Another object cache is installed**, and the plugin does not change or remove that file.
 - On multisite, only users with the `manage_network_options` capability see the menu, because the drop-in is shared by all sites of the network.
 
-New releases show up in **Dashboard → Updates**. After an update, the plugin replaces the drop-in with the new version. When you replace the plugin files manually, select **Disable Cache** and then enable the backend again to replace the drop-in.
+New releases show up in **Dashboard → Updates**. After an update, the plugin replaces the drop-in with the new version, and the new drop-in flushes the cache before its first read. When you replace the plugin files manually, select **Disable Cache** and then enable the backend again to replace the drop-in.
 
 ### 2. Manual Drop-in Installation
 
@@ -52,7 +52,8 @@ New releases show up in **Dashboard → Updates**. After an update, the plugin r
 - Keeps groups registered through `wp_cache_add_non_persistent_groups()` in runtime memory only, except protected groups. The `plugins`, `themes`, and `counts` groups are protected as persistent by default.
 - The **Redis** implementation stores groups in Redis hashes and uses hash operations such as `hSet`, `hGet`, and `hDel`.
 - On Redis 7.4 or later, Redis deletes expired hash fields with `HEXPIREAT`. On older versions, the drop-in deletes an expired field when a request reads it.
-- Redis `wp_cache_flush()` deletes only the keys with the key salt, so other sites in the same database keep their cache.
+- Redis keys contain the key salt, the format and the group, such as `salt:iz:options` for igbinary with zstd. The format is `i` for igbinary or `p` for the PHP serializer, then `z` for zstd, `l` for LZ4 or `f` for LZF. A request that started before a format change writes to the keys of the old format, so the requests with the new format do not read its values.
+- Redis `wp_cache_flush()` deletes only the keys with the key salt, in all formats, so other sites in the same database keep their cache.
 - The **Memcached** implementation namespaces keys by installation, blog, and group, and uses per-group version counters for logical group flushing.
 - Memcached keys include a site version. `wp_cache_flush()` changes this version, so other sites on the same servers keep their cache.
 - Memcached reads a TTL of more than 30 days as a Unix time, so the drop-in converts such a TTL to a Unix time.
@@ -69,7 +70,7 @@ New releases show up in **Dashboard → Updates**. After an update, the plugin r
 - When a Redis command fails and Redis does not reply to `PING`, the drop-in stops using Redis for the remainder of the request.
 - When a Redis write or delete fails, the old value stays in Redis. The drop-in then stops using Redis for the remainder of the request and creates the `oc-flush` marker.
 - Backend initialization failures create WordPress admin notices. Runtime Redis errors use `E_USER_NOTICE`; Memcached and selected APCu errors use `E_USER_WARNING`. Display and logging follow the site's PHP and WordPress error configuration.
-- On detected Redis or Memcached failures, the drop-in attempts to create an internal `oc-flush` marker. On a later successful initialization, Redis deletes all keys with the key salt and Memcached changes the site version before the marker is removed. This best-effort recovery requires the deployed drop-in directory to be writable.
+- On detected Redis or Memcached failures, and when the Cache Settings page saves the settings or turns on the cache, the plugin creates an internal `oc-flush` marker. On a later successful initialization, Redis deletes all keys with the key salt, Memcached changes the site version, and APCu flushes its keys before the marker is removed. This best-effort recovery requires the deployed drop-in directory to be writable.
 
 ## Query Monitor
 
@@ -97,8 +98,10 @@ Configuration values are optional when the built-in local defaults suit the envi
 - The page writes the settings to `wp-content/oc-config.php`, a PHP file that returns an array. The drop-in reads it once on each request. OPcache keeps it in memory.
 - A constant in `wp-config.php` wins over the value on the page. The page shows the field as read-only.
 - **Test** connects to the backend with the values of the form, then writes, reads and deletes a test key. It does not save the values.
-- When the cache is on, **Save Changes** tests the new values first and saves them only when the test passes. When you select another handler, it replaces the drop-in and flushes the cache.
-- **Turn On** tests the saved values, installs the drop-in of the selected handler and flushes the cache. **Turn Off** removes the drop-in.
+- When the cache is on, **Save Changes** tests the new values first and saves them only when the test passes. When the test fails, the form keeps the values that you typed. When you select another handler, it replaces the drop-in.
+- **Turn On** tests the saved values and installs the drop-in of the selected handler. **Turn Off** removes the drop-in.
+- After **Save Changes** and **Turn On**, the drop-in flushes the cache before its first read. Thus, values in an old format or from another backend do not stay in the cache.
+- **Detect** fills the form with the settings of the host and of other object cache plugins. It does not save the values. When `oc-config.php` does not exist, the page shows the detected settings, and **Turn On** saves them. See [Detection](#detection).
 - **Tracing** logs the backend calls for the Query Monitor panel. See [Query Monitor](#query-monitor).
 - On a site with more than one web server, the page changes the files only on the server that handles the request. Use constants on these sites.
 
@@ -112,9 +115,10 @@ Configuration values are optional when the built-in local defaults suit the envi
 - `WP_REDIS_PORT` - Redis port. Default: `6379`.
 - `WP_REDIS_TIMEOUT` - Connection and read timeout in seconds. Default: `1`.
 - `WP_REDIS_RETRY_INTERVAL` - Retry interval in milliseconds. Default: `100`.
+- `WP_REDIS_USERNAME` - Redis 6 ACL user. The drop-in sends it with `WP_REDIS_PASSWORD`.
 - `WP_REDIS_PASSWORD` - Redis authentication password.
 - `WP_REDIS_DATABASE` - Redis database number.
-- `WP_REDIS_PERSISTENT_CONNECT` - Enable persistent connections. Default: enabled. Each database and password uses a separate persistent connection.
+- `WP_REDIS_PERSISTENT_CONNECT` - Enable persistent connections. Default: enabled. Each database and password uses a separate persistent connection. The drop-in selects the database on each request, because phpredis can give a pooled connection that another site used.
 - `WP_REDIS_PERSISTENT_GROUPS` - Comma-separated string or array replacing the protected-group list. Protected groups ignore requests to make them non-persistent. Default: `plugins`, `themes`, and `counts`.
 - `WP_REDIS_IGBINARY` - Enable igbinary serialization when available. Default: enabled.
 - `WP_REDIS_COMPRESSION` - Enable Redis compression when available. The drop-in uses zstd, then LZ4, then LZF. Default: enabled.
@@ -122,16 +126,34 @@ Configuration values are optional when the built-in local defaults suit the envi
 
 ### Memcached
 
-- `$memcached_servers` - WordPress global containing the Memcached server list. Default: `[['127.0.0.1', 11211]]`.
+- `$memcached_servers` - WordPress global containing the Memcached server list. Default: `[['127.0.0.1', 11211]]`. The drop-in also accepts `host:port` and `unix://path` strings, and a list in a `default` bucket, as on WP Engine.
 - `WP_MEMCACHED_PERSISTENT_GROUPS` - Comma-separated string or array replacing the protected-group list. Protected groups ignore requests to make them non-persistent. Default: `plugins`, `themes`, and `counts`.
 - `WP_MEMCACHED_CONNECT_TIMEOUT` - Connection timeout in milliseconds. Default: `250`.
 - `WP_MEMCACHED_SEND_TIMEOUT` - Send timeout in milliseconds. Default: `250`.
 - `WP_MEMCACHED_RECV_TIMEOUT` - Receive timeout in milliseconds. Default: `250`.
-- `WP_MEMCACHED_IGBINARY` - Enable igbinary serialization when available. Default: disabled.
+- `WP_MEMCACHED_IGBINARY` - Enable igbinary serialization when available. Default: enabled. The memcached extension marks the serializer of each value, so it also reads the values that it saved before with the PHP serializer.
 
 ### APCu
 
 - `WP_APCU_PERSISTENT_GROUPS` - Comma-separated string or array replacing the protected-group list. Protected groups ignore requests to make them non-persistent. Default: `plugins`, `themes`, and `counts`.
+
+### Detection
+
+The page reads these sources in this order. A value from an earlier source wins. A constant of Twee Cache in `wp-config.php` wins over all of them.
+
+| Source | Hosts and plugins | Values |
+| --- | --- | --- |
+| `WP_REDIS_HOST` | Nexcess, Redis Object Cache | Selects Redis |
+| `WP_REDIS_CONFIG` | Object Cache Pro, Nexcess, Cloudways | Host, port, database, user, password, timeout, retry interval, prefix, compression, serializer |
+| `$redis_server` | WP Redis, Pantheon | Host, port, password, database |
+| `WP_REDIS_SERVERS`, `WP_REDIS_PATH`, `WP_REDIS_PREFIX`, `WP_REDIS_SERIALIZER` | Redis Object Cache | First server, socket, prefix, serializer |
+| `REDIS_URL`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `CACHE_HOST`, `CACHE_PORT`, `CACHE_PASSWORD` | Heroku, Pantheon | Redis connection |
+| Redis sockets | Nexcess (`/var/run/redis-multi-{account}.redis/redis.sock`), `/var/run/redis/redis.sock` and others | Redis socket |
+| `$memcached_servers`, `WPE_CACHE_HOST` | WP Engine, Memcached plugins | Memcached servers |
+| Memcached sockets | `/tmp/memcached.sock`, `/var/run/memcached/memcached.sock` | Memcached socket |
+| `127.0.0.1:6379`, `127.0.0.1:11211` | SiteGround and other hosts with default ports | Redis, then Memcached |
+
+The page selects Redis when it finds a Redis host, and Memcached when it finds only Memcached servers. The prefix of another plugin becomes the key salt.
 
 ## Development
 
@@ -139,6 +161,7 @@ Configuration values are optional when the built-in local defaults suit the envi
 ├── plugin/                    The plugin, as it is installed in wp-content/plugins/twee-cache/
 │   ├── twee-cache.php         Loads the includes, adds the hooks, replaces an older drop-in on activation, removes it on deactivation
 │   ├── handlers/              The drop-ins: apcu.php, memcached.php, redis.php
+│   ├── assets/                Styles of the Cache Settings page: scss/ sources, css/ built with gulp or sass
 │   └── includes/
 │       ├── admin.php          Admin Bar menu and its actions
 │       ├── dropin.php         Drop-in install, engine detection, Query Monitor connection

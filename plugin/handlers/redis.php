@@ -3,7 +3,7 @@
  * Plugin Name: Twee Redis Cache
  * Plugin URI: https://github.com/TwistedAndy/twee-cache
  * Description: A high-performance, lightweight Redis object cache for WordPress and WooCommerce.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
  */
@@ -222,6 +222,12 @@ class WP_Object_Cache
 
 	private string $key_salt = '';
 
+	/**
+	 * The serializer and the compression in the keys, such as "iz" for igbinary with zstd.
+	 * A request that started before a format change cannot write values that the requests with the new format read.
+	 */
+	private string $key_format = '';
+
 	private bool $active = true;
 
 	/**
@@ -239,12 +245,18 @@ class WP_Object_Cache
 	public function __construct()
 	{
 		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting.
-		$config = is_file(__DIR__ . '/oc-config.php') ? (array) include __DIR__ . '/oc-config.php' : [];
-		$setting = fn(string $name, mixed $default = null): mixed => defined($name) ? constant($name) : ($config[$name] ?? $default);
+		$config_file = __DIR__ . '/oc-config.php';
+		$config = is_file($config_file) ? (array) include $config_file : [];
+
+		foreach (['WP_REDIS_PERSISTENT_GROUPS', 'WP_CACHE_KEY_SALT', 'WP_REDIS_USE_RELAY', 'WP_REDIS_HOST', 'WP_REDIS_PORT', 'WP_REDIS_TIMEOUT', 'WP_REDIS_RETRY_INTERVAL', 'WP_REDIS_DATABASE', 'WP_REDIS_PASSWORD', 'WP_REDIS_USERNAME', 'WP_REDIS_PERSISTENT_CONNECT', 'WP_REDIS_IGBINARY', 'WP_REDIS_COMPRESSION'] as $name) {
+			if (defined($name)) {
+				$config[$name] = constant($name);
+			}
+		}
 
 		$this->debug = !empty($config['trace']);
 
-		$groups = $setting('WP_REDIS_PERSISTENT_GROUPS');
+		$groups = $config['WP_REDIS_PERSISTENT_GROUPS'] ?? null;
 
 		if ($groups !== null and $groups !== '') {
 			$groups = is_string($groups) ? explode(',', $groups) : $groups;
@@ -264,13 +276,13 @@ class WP_Object_Cache
 		}
 
 		// The host name changes between web, WP-CLI and multisite requests, so the default salt uses the database
-		$this->key_salt = (string) $setting('WP_CACHE_KEY_SALT', '');
+		$this->key_salt = (string) ($config['WP_CACHE_KEY_SALT'] ?? '');
 
 		if ($this->key_salt === '') {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
 		}
 
-		if ($setting('WP_REDIS_USE_RELAY', false) and class_exists('Relay\Relay')) {
+		if (($config['WP_REDIS_USE_RELAY'] ?? false) and class_exists('Relay\Relay')) {
 			$this->redis = new Relay\Relay();
 		} else {
 			$this->redis = new Redis();
@@ -278,14 +290,20 @@ class WP_Object_Cache
 
 		$this->field_expiry = method_exists($this->redis, 'hExpireAt');
 
-		$host = (string) $setting('WP_REDIS_HOST', '127.0.0.1');
-		$port = (int) $setting('WP_REDIS_PORT', 6379);
+		$host = (string) ($config['WP_REDIS_HOST'] ?? '127.0.0.1');
+		$port = (int) ($config['WP_REDIS_PORT'] ?? 6379);
 
-		$timeout = (float) $setting('WP_REDIS_TIMEOUT', 1);
-		$retry_interval = (int) $setting('WP_REDIS_RETRY_INTERVAL', 100);
+		$timeout = (float) ($config['WP_REDIS_TIMEOUT'] ?? 1);
+		$retry_interval = (int) ($config['WP_REDIS_RETRY_INTERVAL'] ?? 100);
 
-		$database = (int) $setting('WP_REDIS_DATABASE', 0);
-		$password = $setting('WP_REDIS_PASSWORD', '');
+		$database = (int) ($config['WP_REDIS_DATABASE'] ?? 0);
+		$password = $config['WP_REDIS_PASSWORD'] ?? '';
+		$username = (string) ($config['WP_REDIS_USERNAME'] ?? '');
+
+		// A Redis 6 ACL user logs in with the name and the password
+		if ($username !== '' and is_string($password) and $password !== '') {
+			$password = [$username, $password];
+		}
 
 		try {
 
@@ -293,7 +311,7 @@ class WP_Object_Cache
 				$port = 0;
 			}
 
-			if ($setting('WP_REDIS_PERSISTENT_CONNECT', true)) {
+			if ($config['WP_REDIS_PERSISTENT_CONNECT'] ?? true) {
 				/*
 				 * A persistent connection keeps its database and its login between requests.
 				 * Each database and password gets a separate connection, so that a site cannot use the state of other sites.
@@ -313,23 +331,29 @@ class WP_Object_Cache
 				throw new Exception('Authentication failed: ' . $this->redis->getLastError());
 			}
 
-			if ($database > 0 and !$this->redis->select($database)) {
+			// A pooled persistent connection keeps the database that another site selected, so database 0 needs the command too
+			if (!$this->redis->select($database)) {
 				throw new Exception('Cannot select database ' . $database . ': ' . $this->redis->getLastError());
 			}
 
-			if ($setting('WP_REDIS_IGBINARY', true) and defined('Redis::SERIALIZER_IGBINARY') and extension_loaded('igbinary')) {
+			if (($config['WP_REDIS_IGBINARY'] ?? true) and defined('Redis::SERIALIZER_IGBINARY') and extension_loaded('igbinary')) {
 				$this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_IGBINARY);
+				$this->key_format = 'i';
 			} else {
 				$this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP);
+				$this->key_format = 'p';
 			}
 
-			if ($setting('WP_REDIS_COMPRESSION', true)) {
+			if ($config['WP_REDIS_COMPRESSION'] ?? true) {
 				if (defined('Redis::COMPRESSION_ZSTD')) {
 					$this->redis->setOption(Redis::OPT_COMPRESSION, Redis::COMPRESSION_ZSTD);
+					$this->key_format .= 'z';
 				} elseif (defined('Redis::COMPRESSION_LZ4')) {
 					$this->redis->setOption(Redis::OPT_COMPRESSION, Redis::COMPRESSION_LZ4);
+					$this->key_format .= 'l';
 				} elseif (defined('Redis::COMPRESSION_LZF')) {
 					$this->redis->setOption(Redis::OPT_COMPRESSION, Redis::COMPRESSION_LZF);
+					$this->key_format .= 'f';
 				}
 			}
 
@@ -893,7 +917,7 @@ class WP_Object_Cache
 			return true;
 		}
 
-		// Delete only the keys with the key salt. Other sites in the same database keep their keys.
+		// Delete only the keys with the key salt, in all formats. Other sites in the same database keep their keys.
 		$pattern = addcslashes($this->key_salt, '*?[]\\') . ':*';
 		$iterator = null;
 		$flushed = true;
@@ -1193,7 +1217,7 @@ class WP_Object_Cache
 			$prefix = $this->blog_prefix;
 		}
 
-		$cache_group = $this->key_salt . ':' . $prefix . $group;
+		$cache_group = $this->key_salt . ':' . $this->key_format . ':' . $prefix . $group;
 
 		$this->group_mapping[$group] = $cache_group;
 

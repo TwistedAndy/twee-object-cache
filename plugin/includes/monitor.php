@@ -213,7 +213,13 @@ class Twee_Cache_QM_Commands_Output extends QM_Output_Html
 
 		$commands = $data['commands'];
 		$types = array_unique(array_column($commands, 'command'));
-		$components = array_unique(array_map(fn($command) => $command['backtrace']->get_component()->name, $commands));
+		$components = [];
+
+		foreach ($commands as $command) {
+			$components[] = $command['backtrace']->get_component()->name;
+		}
+
+		$components = array_unique($components);
 
 		sort($types);
 		sort($components);

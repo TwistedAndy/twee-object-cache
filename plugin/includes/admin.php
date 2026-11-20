@@ -39,21 +39,26 @@ function toc_admin_action(): void
 			wp_die('An object cache is already installed. Disable it first.', 'Object Cache', ['back_link' => true]);
 		}
 
-		$test = toc_dropin_test($engine, toc_settings_get());
+		$settings = toc_settings_get();
+		$test = toc_dropin_test($engine, $settings);
 
 		if (!$test['ok']) {
 			wp_die(esc_html($test['message']) . ' Check the settings on the Cache Settings page.', 'Object Cache', ['back_link' => true]);
 		}
 
+		// The drop-in reads oc-config.php only, so the detected settings must be saved there first
+		$config_file = WP_CONTENT_DIR . '/oc-config.php';
+
+		if (!is_file($config_file) and !toc_settings_put(['handler' => $engine] + $settings)) {
+			wp_die('Cannot write ' . esc_html($config_file) . '. Make sure that the web server can write to the wp-content folder.', 'Object Cache', ['back_link' => true]);
+		}
+
+		// The cache still holds the values from before the drop-in was removed, so the drop-in flushes it before the first read
+		@touch(WP_CONTENT_DIR . '/oc-flush');
+
 		if (!toc_dropin_install($engine)) {
 			wp_die('Cannot write ' . esc_html($dropin_file) . '. Make sure that the web server can write to the wp-content folder.', 'Object Cache', ['back_link' => true]);
 		}
-
-		// The drop-in loads on the next request, so that request removes the values that were saved before
-		$redirect_url = add_query_arg([
-			'toc_action' => 'flush',
-			'_wpnonce'   => wp_create_nonce('toc_action')
-		], $redirect_url);
 	}
 
 	wp_safe_redirect($redirect_url);

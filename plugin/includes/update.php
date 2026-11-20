@@ -29,8 +29,9 @@ function toc_update_dropin($upgrader, array $options): void
 	$installed = get_file_data(WP_CONTENT_DIR . '/object-cache.php', ['version' => 'Version'])['version'];
 	$source_file = dirname(__DIR__) . '/handlers/' . $engine . '.php';
 
-	if (is_file($source_file) and $installed !== get_file_data($source_file, ['version' => 'Version'])['version']) {
-		toc_dropin_install($engine);
+	// A new version can change the keys, so the new drop-in flushes the cache before its first read
+	if (is_file($source_file) and $installed !== get_file_data($source_file, ['version' => 'Version'])['version'] and toc_dropin_install($engine)) {
+		@touch(WP_CONTENT_DIR . '/oc-flush');
 	}
 }
 
@@ -58,7 +59,14 @@ function toc_update_release(): array
 	$data = is_wp_error($response) ? null : json_decode(wp_remote_retrieve_body($response), true);
 
 	// The source archives that GitHub adds hold the whole repository, so only an attached ZIP can be installed
-	$zip = current(array_filter($data['assets'] ?? [], fn($asset) => str_ends_with((string) ($asset['name'] ?? ''), '.zip')));
+	$zip = null;
+
+	foreach ($data['assets'] ?? [] as $asset) {
+		if (str_ends_with((string) ($asset['name'] ?? ''), '.zip')) {
+			$zip = $asset;
+			break;
+		}
+	}
 
 	$release = (!empty($data['tag_name']) and $zip) ? [
 		'version' => ltrim($data['tag_name'], 'vV'),
