@@ -10,6 +10,9 @@
 .cache_box:has(#toc-handler option[value=apcu]:checked) .section[data-handler=apcu] {
   display: block;
 }
+.cache_box > .notice {
+  margin: 16px 0 0;
+}
 .cache_box .sections {
   display: flex;
   flex-direction: column;

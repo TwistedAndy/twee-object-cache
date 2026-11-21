@@ -20,9 +20,9 @@ function toc_settings_url(): string
 
 
 /**
- * Do the action of an Object Cache menu link (enable, disable, flush)
+ * Do the action of an Object Cache menu link (enable, disable)
  *
- * The action runs before the page output starts, so the redirect can send its headers.
+ * The action runs before the page output starts, so the redirect can send its headers. The handler does the Clean Cache link (flush).
  */
 function toc_admin_action(): void
 {
@@ -37,9 +37,7 @@ function toc_admin_action(): void
 	$dropin_file = WP_CONTENT_DIR . '/object-cache.php';
 	$redirect_url = remove_query_arg(['toc_action', '_wpnonce']);
 
-	if ($action === 'flush') {
-		wp_cache_flush();
-	} elseif ($action === 'disable') {
+	if ($action === 'disable') {
 		if (toc_dropin_engine() !== '' and !@unlink($dropin_file)) {
 			wp_die('Cannot delete ' . esc_html($dropin_file) . '. Make sure that the web server can write to this file.', 'Object Cache', ['back_link' => true]);
 		}
@@ -76,12 +74,6 @@ function toc_admin_bar(WP_Admin_Bar $admin_bar): void
 		return;
 	}
 
-	$engines = [
-		'memcached' => 'Memcached',
-		'redis'     => 'Redis',
-		'apcu'      => 'APCu'
-	];
-
 	$admin_bar->add_node([
 		'id'    => 'twee-cache',
 		'title' => 'Object Cache',
@@ -95,15 +87,13 @@ function toc_admin_bar(WP_Admin_Bar $admin_bar): void
 		'href'   => toc_settings_url(),
 	]);
 
-	$engine = toc_dropin_engine();
+	if (toc_dropin_engine() !== '') {
+		global $wp_object_cache;
 
-	if ($engine !== '') {
-		$admin_bar->add_node([
-			'id'     => 'twee-cache-flush',
-			'parent' => 'twee-cache',
-			'title'  => 'Clean Cache',
-			'href'   => wp_nonce_url(add_query_arg('toc_action', 'flush'), 'toc_action'),
-		]);
+		// The handler adds Clean Cache, the engine, the hit ratio and the backend reads. When the drop-in cannot find the handler, WordPress uses its own cache.
+		if (method_exists($wp_object_cache, 'admin_bar')) {
+			$wp_object_cache->admin_bar($admin_bar);
+		}
 
 		$admin_bar->add_node([
 			'id'     => 'twee-cache-disable',
@@ -111,44 +101,6 @@ function toc_admin_bar(WP_Admin_Bar $admin_bar): void
 			'title'  => 'Disable Cache',
 			'href'   => wp_nonce_url(add_query_arg('toc_action', 'disable'), 'toc_action'),
 		]);
-
-		$admin_bar->add_group([
-			'id'     => 'twee-cache-info',
-			'parent' => 'twee-cache',
-			'meta'   => ['class' => 'ab-sub-secondary'],
-		]);
-
-		// Each row has a label and a value
-		$rows = ['engine' => ['<strong>' . $engines[$engine] . '</strong>', '']];
-
-		global $wp_object_cache;
-
-		// The values of the page until the Admin Bar shows. In wp-admin, the Admin Bar shows before most of the page.
-		// They need no backend request. Query Monitor shows the memory, the keys and the latency of the backend.
-		if (method_exists($wp_object_cache, 'debug_info')) {
-			$hits = $wp_object_cache->cache_hits;
-			$misses = $wp_object_cache->cache_misses;
-			$ratio = ($hits + $misses) > 0 ? round($hits / ($hits + $misses) * 100, 1) : 0;
-
-			$rows['engine'][1] = $wp_object_cache->active ? 'Connected' : 'Not connected';
-			$rows['ratio'] = ['Hit ratio', $ratio . '% (' . number_format_i18n($hits) . ' / ' . number_format_i18n($misses) . ')'];
-			$rows['reads'] = [$engines[$engine] . ' reads', number_format_i18n($wp_object_cache->cache_loads)];
-		}
-
-		// The first row adds the styles of the rows: the label at the left and the value at the right.
-		// The Admin Bar gives each element a line height of 32px, so the text in a row of 20px moves down without the inherit rule.
-		$meta = ['html' => '<style>#wpadminbar #wp-admin-bar-twee-cache-info{padding:9px 0}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item{display:flex;justify-content:space-between;gap:24px;height:20px;line-height:20px}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item *{line-height:inherit}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item span+span{color:#f0f0f1;font-variant-numeric:tabular-nums}</style>'];
-
-		foreach ($rows as $id => $row) {
-			$admin_bar->add_node([
-				'id'     => 'twee-cache-' . $id,
-				'parent' => 'twee-cache-info',
-				'title'  => '<span>' . $row[0] . '</span><span>' . $row[1] . '</span>',
-				'meta'   => $meta,
-			]);
-
-			$meta = [];
-		}
 
 		return;
 	}
@@ -165,7 +117,7 @@ function toc_admin_bar(WP_Admin_Bar $admin_bar): void
 
 	$available = false;
 
-	foreach ($engines as $ext => $name) {
+	foreach (['memcached' => 'Memcached', 'redis' => 'Redis', 'apcu' => 'APCu'] as $ext => $name) {
 		if (extension_loaded($ext)) {
 			$available = true;
 

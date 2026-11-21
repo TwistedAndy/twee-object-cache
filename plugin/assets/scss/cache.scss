@@ -10,6 +10,11 @@
 		}
 	}
 
+	// The notices of the page show under the tabs, with the same gap as the sections
+	> .notice {
+		margin: 16px 0 0;
+	}
+
 	.sections {
 		display: flex;
 		flex-direction: column;
