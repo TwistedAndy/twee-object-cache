@@ -1,6 +1,6 @@
 <?php
 /**
- * The Cache Settings page. It stores the settings in wp-content/cache-config.php, and the drop-in reads them from there.
+ * The Cache Settings page. It saves the settings in the toc_settings site option, and writes a copy of them into the drop-in.
  */
 
 if (!defined('ABSPATH')) {
@@ -10,7 +10,7 @@ if (!defined('ABSPATH')) {
 /**
  * The fields of each handler: the label, the type, the default value, the description and the unit that shows after a number field
  *
- * The key of a field in cache-config.php is the name of the wp-config.php constant that wins over it, in lower case and without WP_.
+ * The key of a field is the name of the wp-config.php constant that wins over it, in lower case and without WP_.
  * The $memcached_servers global wins over the memcached_servers field.
  * A switch with the default null is on when the server supports it.
  */
@@ -71,7 +71,7 @@ function toc_settings_menu(): void
 /**
  * Load the styles of the page and save the settings of the form
  *
- * When the cache is on, the new settings must pass the test, because the next request uses them. A new handler replaces the drop-in.
+ * When the cache is on, the drop-in holds a copy of the settings, so it is written again.
  */
 function toc_settings_action(): void
 {
@@ -83,27 +83,9 @@ function toc_settings_action(): void
 
 	check_admin_referer('toc_settings');
 
-	$settings = toc_settings_get(wp_unslash($_POST));
-	$engine = toc_dropin_engine();
-	$test = $engine !== '' ? toc_dropin_test($settings['handler'], $settings) : ['ok' => true];
+	$result = toc_settings_save(toc_settings_get(wp_unslash($_POST)), toc_dropin_engine() !== '');
 
-	if (!$test['ok']) {
-		add_settings_error('toc', 'toc_test', 'The settings are not saved. ' . $test['message']);
-	} elseif (!toc_settings_put($settings)) {
-		add_settings_error('toc', 'toc_write', 'Cannot write ' . WP_CONTENT_DIR . '/cache-config.php. Make sure that the web server can write to the wp-content folder.');
-	} else {
-		$installed = ($engine === '' or $settings['handler'] === $engine or toc_dropin_install($settings['handler']));
-
-		// The cache can hold values in another format or from another backend, so the drop-in flushes it before its first read.
-		// The marker comes after the new drop-in, because a request with the old drop-in can take it.
-		@touch(WP_CONTENT_DIR . '/cache-flush');
-
-		if ($installed) {
-			add_settings_error('toc', 'toc_saved', 'Settings saved.', 'success');
-		} else {
-			add_settings_error('toc', 'toc_install', 'The settings are saved, but the drop-in is not replaced. Make sure that the web server can write to the wp-content folder.');
-		}
-	}
+	add_settings_error('toc', 'toc_save', $result['ok'] ? 'Settings saved.' : $result['message'], $result['ok'] ? 'success' : 'error');
 }
 
 
@@ -117,7 +99,7 @@ function toc_settings_page(): void
 	$loaded = ['redis' => extension_loaded('redis'), 'memcached' => extension_loaded('memcached'), 'apcu' => extension_loaded('apcu')];
 	$supported = toc_settings_supported();
 	$test = null;
-	$config_exists = is_file(WP_CONTENT_DIR . '/cache-config.php');
+	$saved = is_array(get_site_option('toc_settings'));
 	$detected = toc_settings_detect();
 	$found = toc_settings_get($detected['values']);
 
@@ -137,8 +119,8 @@ function toc_settings_page(): void
 			$settings[$name] = $found[$name];
 		}
 	} else {
-		// Without cache-config.php, the form shows the settings found on the server
-		$settings = $config_exists ? toc_settings_get() : $found;
+		// Without saved settings, the form shows the settings found on the server
+		$settings = $saved ? toc_settings_get() : $found;
 
 		// The Admin Bar menu can enable a handler without a change of the settings
 		if ($engine !== '') {
@@ -175,7 +157,7 @@ function toc_settings_page(): void
 
 	if (!empty($_POST['toc_reset'])) {
 		echo '<div class="notice notice-info inline"><p><strong>The connection fields show the values found on this server or the defaults.</strong> They are not saved. Select Test Connection to examine them, then select Save Changes.</p></div>';
-	} elseif (!$config_exists and $sources) {
+	} elseif (!$saved and $sources) {
 		echo '<div class="notice notice-info inline"><p><strong>The form shows the settings found on this server.</strong> Sources: ' . $sources . '. Select Test Connection to examine them, then select Save Changes or Enable Cache.</p></div>';
 	} elseif ($hints) {
 		echo '<div class="notice notice-info inline"><p><strong>Some settings found on this server are different.</strong> They show under the fields. Sources: ' . $sources . '.</p></div>';
@@ -209,9 +191,8 @@ function toc_settings_page(): void
 				$items .= '<option value="' . $handler . '"' . selected($settings['handler'], $handler, false) . disabled(!$loaded[$handler], true, false) . '>' . $name . ($loaded[$handler] ? '' : ' (no extension)') . '</option>';
 			}
 
-			$items .= '</select></div><span class="text">When the cache is on, Save Changes replaces the drop-in.</span>' . (isset($hints['handler']) ? '<span class="text text_found">Found on this server: ' . $names[$hints['handler']] . '</span>' : '') . '</div>';
+			$items .= '</select></div><span class="text">When the cache is on, Save Changes writes the drop-in again.</span>' . (isset($hints['handler']) ? '<span class="text text_found">Found on this server: ' . $names[$hints['handler']] . '</span>' : '') . '</div>';
 			$options = '<label class="option"><input type="checkbox" name="trace" value="1"' . checked($settings['trace'], true, false) . '><span class="details"><span class="label">Tracing</span><span class="text">Record the backend calls for Query Monitor. Each call keeps a backtrace in memory, so use it only on development sites.</span></span></label>';
-			$options .= '<label class="option"><input type="hidden" name="delete_settings" value="0"><input type="checkbox" name="delete_settings" value="1"' . checked($settings['delete_settings'], true, false) . '><span class="details"><span class="label">Delete settings on deactivation</span><span class="text">Delete wp-content/cache-config.php when you deactivate the plugin. The constants in wp-config.php stay.</span></span></label>';
 		} else {
 			// Only the section of the selected handler shows, so its buttons use the selected handler. APCu has no connection fields to reset.
 			$buttons = '<button type="submit" name="toc_test" value="1" class="button" title="Connect with the values of the form, then write, read and delete a test key. The values are not saved.">Test Connection</button>';
@@ -286,15 +267,6 @@ function toc_settings_page(): void
 
 
 /**
- * Get the URL of the Cache Settings page. On multisite, the page is in the Network Admin.
- */
-function toc_settings_url(): string
-{
-	return is_multisite() ? network_admin_url('settings.php?page=twee-cache') : admin_url('options-general.php?page=twee-cache');
-}
-
-
-/**
  * Get the Memcached servers as the Servers field shows them
  *
  * @param array $servers The [host, port] pairs from toc_settings_get()
@@ -319,7 +291,7 @@ function toc_settings_servers(array $servers): array
  * The sources are the WP_REDIS_CONFIG array of Object Cache Pro, the $redis_server global of WP Redis, the constants of Redis Object Cache,
  * the $memcached_servers global, the environment variables, the sockets of the host and the default ports. A value from an earlier source wins.
  *
- * @return array The values with the keys of cache-config.php, and the names of the sources that gave them
+ * @return array The values with the keys of TOC_SETTINGS, and the names of the sources that gave them
  */
 function toc_settings_detect(): array
 {
@@ -538,23 +510,25 @@ function toc_settings_supported(): array
 /**
  * Get the settings with their defaults. A constant in wp-config.php wins over a setting.
  *
- * When cache-config.php does not exist, the detected settings replace it.
+ * Without saved settings, the detected settings replace them.
  *
  * @param array|null $input The values of the form or of the detection, or null for the saved settings
  *
- * @return array The handler, the trace flag, the delete_settings flag and the value of each field in TOC_SETTINGS
+ * @return array The handler, the trace flag and the value of each field in TOC_SETTINGS
  */
 function toc_settings_get(?array $input = null): array
 {
-	$config_file = WP_CONTENT_DIR . '/cache-config.php';
-	$values = $input ?? (is_file($config_file) ? (array) include $config_file : toc_settings_detect()['values']);
+	$values = $input ?? get_site_option('toc_settings');
+
+	if (!is_array($values)) {
+		$values = toc_settings_detect()['values'];
+	}
+
 	$handler = (string) ($values['handler'] ?? '');
 
-	// The settings are deleted on deactivation unless the switch is off
 	$settings = [
-		'handler'         => in_array($handler, ['redis', 'memcached', 'apcu'], true) ? $handler : '',
-		'trace'           => !empty($values['trace']),
-		'delete_settings' => (bool) ($values['delete_settings'] ?? true),
+		'handler' => in_array($handler, ['redis', 'memcached', 'apcu'], true) ? $handler : '',
+		'trace'   => !empty($values['trace']),
 	];
 
 	// The switches with the default null are on when the server supports them, as in the drop-ins
@@ -613,39 +587,44 @@ function toc_settings_get(?array $input = null): array
 
 
 /**
- * Write the settings to wp-content/cache-config.php
+ * Save the settings in the toc_settings site option, and write the drop-in with them
  *
- * The file is replaced with a rename, so a request never loads a partly written file. The values of constants stay in wp-config.php only.
+ * The next request uses the new drop-in, so the settings must pass the test first. The values of constants stay in wp-config.php only.
  *
  * @param array $settings The settings from toc_settings_get()
+ * @param bool  $install  Test the settings and write the drop-in. Without it, the settings are only saved.
  *
- * @return bool
+ * @return array The result (ok) and a message for the user when it failed (message)
  */
-function toc_settings_put(array $settings): bool
+function toc_settings_save(array $settings, bool $install): array
 {
+	if ($install) {
+		$test = toc_dropin_test($settings['handler'], $settings);
+
+		if (!$test['ok']) {
+			return ['ok' => false, 'message' => 'The settings are not saved. ' . $test['message']];
+		}
+	}
+
 	foreach ($settings as $name => $value) {
 		if (defined('WP_' . strtoupper($name)) or ($name === 'memcached_servers' and !empty($GLOBALS['memcached_servers']))) {
 			unset($settings[$name]);
 		}
 	}
 
-	$config_file = WP_CONTENT_DIR . '/cache-config.php';
-	$temp_file = $config_file . '.' . uniqid() . '.tmp';
-	$code = "<?php\n// The Cache Settings page of Twee Cache writes this file. A constant in wp-config.php wins over a value here.\nreturn " . var_export($settings, true) . ";\n";
+	update_site_option('toc_settings', $settings);
 
-	if (@file_put_contents($temp_file, $code) === false) {
-		return false;
+	if (!$install) {
+		return ['ok' => true, 'message' => ''];
 	}
 
-	if (!@rename($temp_file, $config_file)) {
-		@unlink($temp_file);
-		return false;
+	if (!toc_dropin_install()) {
+		return ['ok' => false, 'message' => 'The settings are saved, but wp-content/object-cache.php is not written. Make sure that the web server can write to the wp-content folder.'];
 	}
 
-	// OPcache can keep the old settings when it does not examine the file time
-	if (function_exists('opcache_invalidate')) {
-		opcache_invalidate($config_file, true);
-	}
+	// The cache can hold values from before the drop-in, in another format or from another backend, so the drop-in flushes it before its first read.
+	// The marker comes after the new drop-in, because a request with the old drop-in can take it.
+	@touch(WP_CONTENT_DIR . '/cache-flush');
 
-	return true;
+	return ['ok' => true, 'message' => ''];
 }

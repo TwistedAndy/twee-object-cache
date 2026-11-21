@@ -216,7 +216,10 @@ class WP_Object_Cache {
 
 	private string $key_salt = '';
 
-	private bool $active = true;
+	/**
+	 * False when the backend is not available. The Admin Bar of the plugin reads it.
+	 */
+	public bool $active = true;
 
 	/**
 	 * The error messages of the request
@@ -225,9 +228,8 @@ class WP_Object_Cache {
 
 	public function __construct()
 	{
-		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting. The constant of a key is WP_ and the key in upper case.
-		$config_file = __DIR__ . '/cache-config.php';
-		$config = is_file($config_file) ? (array) include $config_file : [];
+		// The settings of the Cache Settings page, from the object-cache.php that the plugin writes. A constant in wp-config.php wins over a setting. The constant of a key is WP_ and the key in upper case.
+		$config = defined('TWEE_CACHE_CONFIG') ? TWEE_CACHE_CONFIG : [];
 
 		foreach (['apcu_persistent_groups', 'cache_key_salt'] as $key) {
 			$constant = 'WP_' . strtoupper($key);
@@ -273,7 +275,7 @@ class WP_Object_Cache {
 		$this->active = (function_exists('apcu_enabled') and apcu_enabled());
 
 		// The Cache Settings page and failed writes of the other drop-ins ask for a flush with the marker
-		$flag_file = __DIR__ . '/cache-flush';
+		$flag_file = WP_CONTENT_DIR . '/cache-flush';
 
 		if ($this->active and file_exists($flag_file) and $this->flush()) {
 			@unlink($flag_file);
@@ -812,7 +814,7 @@ class WP_Object_Cache {
 		$this->errors[] = $message;
 		$this->active = false;
 
-		$flag_file = __DIR__ . '/cache-flush';
+		$flag_file = WP_CONTENT_DIR . '/cache-flush';
 
 		if (!file_exists($flag_file)) {
 			@touch($flag_file);

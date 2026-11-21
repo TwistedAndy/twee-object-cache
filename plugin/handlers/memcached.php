@@ -223,7 +223,10 @@ class WP_Object_Cache
 	 */
 	private string $site_salt = '';
 
-	private bool $active = false;
+	/**
+	 * False when the backend is not available. The Admin Bar of the plugin reads it.
+	 */
+	public bool $active = false;
 
 	/**
 	 * The error messages of the request
@@ -238,9 +241,8 @@ class WP_Object_Cache
 
 	public function __construct()
 	{
-		// The settings of the Cache Settings page. A constant in wp-config.php wins over a setting. The constant of a key is WP_ and the key in upper case.
-		$config_file = __DIR__ . '/cache-config.php';
-		$config = is_file($config_file) ? (array) include $config_file : [];
+		// The settings of the Cache Settings page, from the object-cache.php that the plugin writes. A constant in wp-config.php wins over a setting. The constant of a key is WP_ and the key in upper case.
+		$config = defined('TWEE_CACHE_CONFIG') ? TWEE_CACHE_CONFIG : [];
 
 		foreach (['memcached_persistent_groups', 'cache_key_salt', 'memcached_connect_timeout', 'memcached_send_timeout', 'memcached_recv_timeout', 'memcached_igbinary'] as $key) {
 			$constant = 'WP_' . strtoupper($key);
@@ -390,7 +392,7 @@ class WP_Object_Cache
 		}
 
 		// Flush stale cache if the server was previously offline
-		$flag_file = __DIR__ . '/cache-flush';
+		$flag_file = WP_CONTENT_DIR . '/cache-flush';
 
 		if ($this->active) {
 			if (file_exists($flag_file) and $this->flush()) {
@@ -1201,8 +1203,8 @@ class WP_Object_Cache
 		if (!$active) {
 			$this->active = false;
 
-			if (!file_exists(__DIR__ . '/cache-flush')) {
-				@touch(__DIR__ . '/cache-flush');
+			if (!file_exists(WP_CONTENT_DIR . '/cache-flush')) {
+				@touch(WP_CONTENT_DIR . '/cache-flush');
 			}
 		}
 

@@ -9,6 +9,17 @@ if (!defined('ABSPATH')) {
 
 
 /**
+ * Get the URL of the Cache Settings page. On multisite, the page is in the Network Admin.
+ *
+ * The Admin Bar and Query Monitor show the link on the front end too, where settings.php does not load.
+ */
+function toc_settings_url(): string
+{
+	return is_multisite() ? network_admin_url('settings.php?page=twee-cache') : admin_url('options-general.php?page=twee-cache');
+}
+
+
+/**
  * Do the action of an Object Cache menu link (enable, disable, flush)
  *
  * The action runs before the page output starts, so the redirect can send its headers.
@@ -39,25 +50,13 @@ function toc_admin_action(): void
 			wp_die('An object cache is already installed. Disable it first.', 'Object Cache', ['back_link' => true]);
 		}
 
-		$settings = toc_settings_get();
-		$test = toc_dropin_test($engine, $settings);
+		// The menu link works on the front end too, where settings.php does not load
+		require_once __DIR__ . '/settings.php';
 
-		if (!$test['ok']) {
-			wp_die(esc_html($test['message']) . ' Check the settings on the Cache Settings page.', 'Object Cache', ['back_link' => true]);
-		}
+		$result = toc_settings_save(['handler' => $engine] + toc_settings_get(), true);
 
-		// The drop-in reads cache-config.php only, so the detected settings must be saved there first
-		$config_file = WP_CONTENT_DIR . '/cache-config.php';
-
-		if (!is_file($config_file) and !toc_settings_put(['handler' => $engine] + $settings)) {
-			wp_die('Cannot write ' . esc_html($config_file) . '. Make sure that the web server can write to the wp-content folder.', 'Object Cache', ['back_link' => true]);
-		}
-
-		// The cache still holds the values from before the drop-in was removed, so the drop-in flushes it before the first read
-		@touch(WP_CONTENT_DIR . '/cache-flush');
-
-		if (!toc_dropin_install($engine)) {
-			wp_die('Cannot write ' . esc_html($dropin_file) . '. Make sure that the web server can write to the wp-content folder.', 'Object Cache', ['back_link' => true]);
+		if (!$result['ok']) {
+			wp_die(esc_html($result['message']), 'Object Cache', ['back_link' => true]);
 		}
 	}
 
@@ -125,24 +124,15 @@ function toc_admin_bar(WP_Admin_Bar $admin_bar): void
 		global $wp_object_cache;
 
 		// The values of the page until the Admin Bar shows. In wp-admin, the Admin Bar shows before most of the page.
+		// They need no backend request. Query Monitor shows the memory, the keys and the latency of the backend.
 		if (method_exists($wp_object_cache, 'debug_info')) {
-			$info = $wp_object_cache->debug_info();
-			$details = $info['details'];
 			$hits = $wp_object_cache->cache_hits;
 			$misses = $wp_object_cache->cache_misses;
 			$ratio = ($hits + $misses) > 0 ? round($hits / ($hits + $misses) * 100, 1) : 0;
 
-			$rows['engine'][1] = $info['active'] ? esc_html($details['Latency'] ?? '') : 'Not connected';
+			$rows['engine'][1] = $wp_object_cache->active ? 'Connected' : 'Not connected';
 			$rows['ratio'] = ['Hit ratio', $ratio . '% (' . number_format_i18n($hits) . ' / ' . number_format_i18n($misses) . ')'];
 			$rows['reads'] = ['Backend reads', number_format_i18n($wp_object_cache->cache_loads)];
-
-			if (isset($details['Memory'])) {
-				$rows['memory'] = ['Memory', esc_html($details['Memory'])];
-			}
-
-			if (isset($details['Keys'])) {
-				$rows['keys'] = ['Keys', number_format_i18n($details['Keys'])];
-			}
 		}
 
 		// The first row adds the styles of the rows: the label at the left and the value at the right

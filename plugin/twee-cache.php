@@ -17,17 +17,35 @@ if (!defined('ABSPATH')) {
 
 require __DIR__ . '/includes/admin.php';
 require __DIR__ . '/includes/dropin.php';
-require __DIR__ . '/includes/settings.php';
-require __DIR__ . '/includes/update.php';
+
+// The Cache Settings page is in wp-admin only
+if (is_admin()) {
+	require __DIR__ . '/includes/settings.php';
+}
 
 add_action('plugins_loaded', 'toc_dropin_monitor');
 add_action('admin_menu', 'toc_settings_menu');
 add_action('network_admin_menu', 'toc_settings_menu');
 add_action('init', 'toc_admin_action');
 add_action('admin_bar_menu', 'toc_admin_bar', 100);
-add_action('upgrader_process_complete', 'toc_update_dropin', 10, 2);
-add_filter('update_plugins_github.com', 'toc_update_check', 10, 3);
-add_filter('plugins_api', 'toc_update_details', 10, 3);
+
+/**
+ * Offer the latest GitHub release as an update. The update code loads only when WordPress examines the updates.
+ */
+add_filter('update_plugins_github.com', function($update, array $plugin_data, string $plugin_file) {
+	require_once __DIR__ . '/includes/update.php';
+
+	return toc_update_check($update, $plugin_data, $plugin_file);
+}, 10, 3);
+
+/**
+ * Show the release notes in the "View version details" window
+ */
+add_filter('plugins_api', function($result, string $action, $args) {
+	require_once __DIR__ . '/includes/update.php';
+
+	return toc_update_details($result, $action, $args);
+}, 10, 3);
 
 /**
  * Add the Settings link in the Plugins list. On multisite, the page is in the Network Admin.
@@ -39,28 +57,24 @@ add_filter((is_multisite() ? 'network_admin_' : '') . 'plugin_action_links_' . p
 });
 
 /**
- * Replace the drop-in of an older version on activation
+ * Write the drop-in again on activation, for example after the plugin folder was renamed.
+ * The drop-in that found no handler already asked for a flush.
  */
 register_activation_hook(__FILE__, function(): void {
-	toc_update_dropin(null, ['type' => 'plugin']);
+	if (toc_dropin_engine() !== '') {
+		toc_dropin_install();
+	}
 });
 
 /**
  * Remove the drop-in and the flush marker on deactivation. A drop-in of another plugin stays.
  *
- * The settings are deleted too, unless "Delete settings on deactivation" is off on the Cache Settings page.
+ * The settings stay in the toc_settings site option for the next activation.
  */
 register_deactivation_hook(__FILE__, function(): void {
 	if (toc_dropin_engine() !== '') {
 		wp_cache_flush();
 		@unlink(WP_CONTENT_DIR . '/object-cache.php');
-	}
-
-	$config_file = WP_CONTENT_DIR . '/cache-config.php';
-	$config = is_file($config_file) ? (array) include $config_file : [];
-
-	if ($config['delete_settings'] ?? true) {
-		@unlink($config_file);
 	}
 
 	@unlink(WP_CONTENT_DIR . '/cache-flush');

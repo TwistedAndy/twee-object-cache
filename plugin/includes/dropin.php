@@ -11,48 +11,63 @@ if (!defined('ABSPATH')) {
 /**
  * Get the engine of the installed drop-in
  *
- * The loaded drop-in of the request names its engine in the WP_Object_Cache::TWEE_CACHE constant.
+ * The loaded handler of the request names its engine in the WP_Object_Cache::TWEE_CACHE constant.
+ * When the drop-in of the plugin cannot find the handler file, for example after the plugin folder was renamed, the engine comes from TWEE_CACHE_CONFIG.
+ * Then the page can disable the cache, and a save or the activation writes the drop-in with the correct path.
  *
  * @return string The engine (redis, memcached or apcu), or an empty string when there is no drop-in or another plugin installed it
  */
 function toc_dropin_engine(): string
 {
 	// The class stays in memory when the drop-in is removed during the request
-	if (!is_file(WP_CONTENT_DIR . '/object-cache.php') or !defined('WP_Object_Cache::TWEE_CACHE')) {
+	if (!is_file(WP_CONTENT_DIR . '/object-cache.php')) {
 		return '';
 	}
 
-	return WP_Object_Cache::TWEE_CACHE;
+	if (defined('WP_Object_Cache::TWEE_CACHE')) {
+		return WP_Object_Cache::TWEE_CACHE;
+	}
+
+	return defined('TWEE_CACHE_CONFIG') ? (string) (TWEE_CACHE_CONFIG['handler'] ?? '') : '';
 }
 
 
 /**
- * Copy the drop-in of an engine to the wp-content folder
+ * Write wp-content/object-cache.php with the saved settings. It loads the handler of the saved engine from the plugin folder.
  *
- * The file is replaced with a rename, so a request never loads a partly written drop-in.
- *
- * @param string $engine redis, memcached or apcu
+ * Thus, a plugin update also updates the cache code. The file is replaced with a rename, so a request never loads a partly written drop-in.
  *
  * @return bool
  */
-function toc_dropin_install(string $engine): bool
+function toc_dropin_install(): bool
 {
-	$source_file = dirname(__DIR__) . '/handlers/' . $engine . '.php';
+	$settings = (array) get_site_option('toc_settings', []);
+	$engine = (string) ($settings['handler'] ?? '');
+	$handler_file = WP_PLUGIN_DIR . '/' . dirname(plugin_basename(dirname(__DIR__) . '/twee-cache.php')) . '/handlers/' . $engine . '.php';
+
+	if ($engine === '' or !is_file($handler_file)) {
+		return false;
+	}
+
+	// A path in wp-content stays correct when the site moves to another folder
+	$handler_path = str_starts_with($handler_file, WP_CONTENT_DIR . '/') ? '__DIR__ . ' . var_export(substr($handler_file, strlen(WP_CONTENT_DIR)), true) : var_export($handler_file, true);
+
+	$code = "<?php\n// Twee Cache writes this file. Change the settings on the Cache Settings page. A constant in wp-config.php wins over a setting.\n"
+		. 'const TWEE_CACHE_CONFIG = ' . var_export($settings, true) . ";\n\n"
+		. "// Without the handler, for example while an update replaces the plugin folder, WordPress uses its own cache.\n"
+		. "// Then the backend can keep values that changed in the database, so the handler flushes it when it is back.\n"
+		. "if (is_file(" . $handler_path . ")) {\n\trequire " . $handler_path . ";\n} elseif (!is_file(__DIR__ . '/cache-flush')) {\n\t@touch(__DIR__ . '/cache-flush');\n}\n";
+
 	$dropin_file = WP_CONTENT_DIR . '/object-cache.php';
 	$temp_file = $dropin_file . '.' . uniqid() . '.tmp';
 
-	if (!@copy($source_file, $temp_file)) {
+	if (@file_put_contents($temp_file, $code) === false) {
 		return false;
 	}
 
 	if (!@rename($temp_file, $dropin_file)) {
 		@unlink($temp_file);
 		return false;
-	}
-
-	// Version 1.1 and older name the flush marker .ocflush
-	if (is_file(WP_CONTENT_DIR . '/.ocflush')) {
-		@rename(WP_CONTENT_DIR . '/.ocflush', WP_CONTENT_DIR . '/cache-flush');
 	}
 
 	// OPcache can keep the old drop-in when it does not examine the file time

@@ -9,33 +9,6 @@ if (!defined('ABSPATH')) {
 
 
 /**
- * Replace the drop-in with the version of the updated plugin
- *
- * @param WP_Upgrader|null $upgrader Null on plugin activation
- * @param array            $options
- */
-function toc_update_dropin($upgrader, array $options): void
-{
-	if (($options['type'] ?? '') !== 'plugin') {
-		return;
-	}
-
-	$engine = toc_dropin_engine();
-
-	if ($engine === '') {
-		return;
-	}
-
-	$source_file = dirname(__DIR__) . '/handlers/' . $engine . '.php';
-
-	// A new version can change the keys, so the new drop-in flushes the cache before its first read
-	if (is_file($source_file) and md5_file($source_file) !== md5_file(WP_CONTENT_DIR . '/object-cache.php') and toc_dropin_install($engine)) {
-		@touch(WP_CONTENT_DIR . '/cache-flush');
-	}
-}
-
-
-/**
  * Get the latest release with a plugin ZIP attached, kept for 12 hours
  *
  * "Check again" on the Updates screen asks GitHub again.
