@@ -31,6 +31,7 @@ Use a handler without the plugin on a production site that does not need the **C
 - Copy `object-cache.php` from `plugin/handlers/apcu/`, `plugin/handlers/memcached/`, or `plugin/handlers/redis/` to `wp-content/`.
 - Set the values with constants in `wp-config.php`, such as `WP_REDIS_HOST` and `WP_REDIS_PASSWORD`. See [Configuration](#configuration). Without constants, the drop-in uses the defaults.
 - WordPress detects the drop-in and starts the persistent cache.
+- The drop-in adds the **Object Cache** menu to the Admin Bar. The menu has **Clean Cache**, the engine, the hit ratio and the backend reads of the page. The plugin adds **Settings** and **Disable Cache**.
 - To update the drop-in, copy the new version. To flush the cache before the first read of the new version, create `wp-content/cache-flush`.
 - When you activate the plugin later, it manages the copy as its own drop-in. **Save Changes** and **Enable Cache** replace it with the drop-in of the plugin.
 
@@ -114,7 +115,7 @@ Configuration values are optional when the built-in local defaults suit the envi
 - The page saves the settings in the `toc_settings` site option. A key is the name of its constant in lower case and without `WP_`, such as `redis_host` for `WP_REDIS_HOST`.
 - When the cache is on, the plugin writes `wp-content/object-cache.php`. This file holds a copy of the settings in the `TWEE_CACHE_CONFIG` constant and loads the handler from `handlers/<engine>/object-cache.php` in the plugin folder. OPcache keeps it in memory. When the plugin folder does not exist, WordPress uses its own cache.
 - A constant in `wp-config.php` wins over the value on the page. The page shows the field as read-only.
-- **Test Connection** in the section of the handler connects to the backend with the values of the form, then writes, reads and deletes a test key. It does not save the values. When the test fails, the message gives the reason. For example, when Redis needs a password and the **Password** field is empty, the message tells where to find the password. A failed Memcached test names the servers and the reason, such as a timeout.
+- **Test Connection** in the section of the handler connects to the backend with the values of the form, then writes, reads and deletes a test key. The test key starts with the key salt, as the keys of the handler do. It does not save the values. When the test fails, the message gives the reason. For example, when Redis needs a password and the **Password** field is empty, the message tells where to find the password. A failed Memcached test names the servers and the reason, such as a timeout.
 - When the cache is on, **Save Changes** tests the new values first and saves them only when the test passes. When the test fails, the form keeps the values that you typed. After a save, the plugin writes the drop-in again with the new values.
 - **Enable Cache** tests the saved values and installs the drop-in of the selected handler. **Disable Cache** removes the drop-in.
 - After **Save Changes** and **Enable Cache**, the drop-in flushes the cache before its first read. Thus, values in an old format or from another backend do not stay in the cache.
@@ -134,7 +135,7 @@ Configuration values are optional when the built-in local defaults suit the envi
 - `WP_REDIS_PORT` - Redis port. Default: `6379`.
 - `WP_REDIS_TIMEOUT` - Connection and read timeout in seconds. Default: `1`.
 - `WP_REDIS_RETRY_INTERVAL` - Retry interval in milliseconds. Default: `100`.
-- `WP_REDIS_USERNAME` - Redis 6 ACL user. The drop-in sends it with `WP_REDIS_PASSWORD`.
+- `WP_REDIS_USERNAME` - Redis 6 ACL user. The drop-in sends it with `WP_REDIS_PASSWORD`. All keys start with the key salt and a colon, so an ACL can allow only these keys, such as `~mysite:*` for the salt `mysite`.
 - `WP_REDIS_PASSWORD` - Redis authentication password.
 - `WP_REDIS_DATABASE` - Redis database number.
 - `WP_REDIS_PERSISTENT_CONNECT` - Enable persistent connections. Default: enabled. Each database and password uses a separate persistent connection. The drop-in selects the database on each request, because phpredis can give a pooled connection that another site used.

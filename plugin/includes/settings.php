@@ -147,8 +147,8 @@ function toc_settings_page(): void
 	echo '<nav class="nav-tab-wrapper"><a class="nav-tab' . ($tab === 'settings' ? ' nav-tab-active' : '') . '" href="' . esc_url(toc_settings_url()) . '">Settings</a><a class="nav-tab' . ($tab === 'stats' ? ' nav-tab-active' : '') . '" href="' . esc_url($stats_url) . '">Statistics</a></nav>';
 
 	if ($tab === 'stats') {
-		// Only a connected Twee handler has debug_info() and the active property
-		if ($engine === '' or !method_exists($wp_object_cache, 'debug_info') or !$wp_object_cache->active) {
+		// Only a connected Twee handler has debug_info() and the active property. The drop-in of 1.4.0 has a private active property, and empty() does not fail on it.
+		if ($engine === '' or !method_exists($wp_object_cache, 'debug_info') or empty($wp_object_cache->active)) {
 			echo '<div class="notice notice-info inline"><p>Enable the cache on the Settings tab to see the statistics.</p></div></div>';
 
 			return;

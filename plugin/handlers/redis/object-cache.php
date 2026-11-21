@@ -234,6 +234,27 @@ class WP_Object_Cache
 
 	public function __construct()
 	{
+		// The Object Cache menu in the Admin Bar. The Twee Cache plugin adds its own menu and calls admin_bar() for the items of the handler.
+		add_action('admin_bar_menu', function(WP_Admin_Bar $admin_bar): void {
+			if (!function_exists('toc_admin_bar')) {
+				$this->admin_bar($admin_bar);
+			}
+		}, 100);
+
+		// The Clean Cache link of the menu. The action runs before the page output starts, so the redirect can send its headers.
+		add_action('init', function(): void {
+			if (($_GET['toc_action'] ?? '') !== 'flush' or !current_user_can(is_multisite() ? 'manage_network_options' : 'manage_options')) {
+				return;
+			}
+
+			check_admin_referer('toc_action');
+
+			$this->flush();
+
+			wp_safe_redirect(remove_query_arg(['toc_action', '_wpnonce']));
+			exit;
+		});
+
 		// The settings of the Cache Settings page, from the object-cache.php that the plugin writes. A constant in wp-config.php wins over a setting. The constant of a key is WP_ and the key in upper case.
 		$config = defined('TWEE_CACHE_CONFIG') ? TWEE_CACHE_CONFIG : [];
 
@@ -950,6 +971,66 @@ class WP_Object_Cache
 			if (!isset($this->global_groups[$group])) {
 				unset($this->cache[$group]);
 			}
+		}
+	}
+
+	/**
+	 * Add the Object Cache menu to the Admin Bar with the Clean Cache link, the engine, the hit ratio and the backend reads of the page
+	 *
+	 * The values need no backend request. In wp-admin, the Admin Bar shows before most of the page, so the values are not complete.
+	 * The Twee Cache plugin adds its own links to the menu and calls this method.
+	 *
+	 * @param WP_Admin_Bar $admin_bar
+	 */
+	public function admin_bar(WP_Admin_Bar $admin_bar): void
+	{
+		if (!current_user_can(is_multisite() ? 'manage_network_options' : 'manage_options')) {
+			return;
+		}
+
+		$hits = $this->cache_hits;
+		$misses = $this->cache_misses;
+		$ratio = ($hits + $misses) > 0 ? round($hits / ($hits + $misses) * 100, 1) : 0;
+
+		// Each row has a label and a value
+		$rows = [
+			'engine' => ['<strong>Redis</strong>', $this->active ? 'Connected' : 'Not connected'],
+			'ratio'  => ['Hit ratio', $ratio . '% (' . number_format_i18n($hits) . ' / ' . number_format_i18n($misses) . ')'],
+			'reads'  => ['Redis reads', number_format_i18n($this->cache_loads)],
+		];
+
+		$admin_bar->add_node([
+			'id'    => 'twee-cache',
+			'title' => 'Object Cache',
+			'href'  => '#',
+		]);
+
+		$admin_bar->add_node([
+			'id'     => 'twee-cache-flush',
+			'parent' => 'twee-cache',
+			'title'  => 'Clean Cache',
+			'href'   => wp_nonce_url(add_query_arg('toc_action', 'flush'), 'toc_action'),
+		]);
+
+		$admin_bar->add_group([
+			'id'     => 'twee-cache-info',
+			'parent' => 'twee-cache',
+			'meta'   => ['class' => 'ab-sub-secondary'],
+		]);
+
+		// The first row adds the styles of the rows: the label at the left and the value at the right.
+		// The Admin Bar gives each element a line height of 32px, so the text in a row of 20px moves down without the inherit rule.
+		$meta = ['html' => '<style>#wpadminbar #wp-admin-bar-twee-cache-info{padding:9px 0}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item{display:flex;justify-content:space-between;gap:24px;height:20px;line-height:20px}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item *{line-height:inherit}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item span+span{color:#f0f0f1;font-variant-numeric:tabular-nums}</style>'];
+
+		foreach ($rows as $id => $row) {
+			$admin_bar->add_node([
+				'id'     => 'twee-cache-' . $id,
+				'parent' => 'twee-cache-info',
+				'title'  => '<span>' . $row[0] . '</span><span>' . $row[1] . '</span>',
+				'meta'   => $meta,
+			]);
+
+			$meta = [];
 		}
 	}
 

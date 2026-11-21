@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.1
+
+- The drop-in adds the **Object Cache** menu to the Admin Bar without the plugin. The menu has **Clean Cache**, the engine, the hit ratio and the backend reads of the page. The plugin adds **Settings** and **Disable Cache** to it.
+- The notices of the **Cache Settings** page have a space between them and the tabs.
+
+Fixes:
+
+- When the Redis user has an ACL that allows only the keys of the site, **Test Connection** and **Enable Cache** failed with "NOPERM No permissions to access a key". The test key now starts with the key salt, as the other keys do.
+- After an update from 1.4.0, the drop-in of 1.4.0 stays, and the Admin Bar menu and the **Statistics** tab failed with a fatal error. Now the menu shows **Settings** and **Disable Cache**. Open **Settings → Cache Settings** and select **Save Changes** to write the new drop-in.
+
 ## 1.5.0
 
 The settings moved from `wp-content/cache-config.php` to the database. After this update, open **Settings → Cache Settings**, examine the values and select **Save Changes**. Then you can delete `cache-config.php`.

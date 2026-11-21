@@ -91,7 +91,14 @@ function toc_dropin_install(): bool
  */
 function toc_dropin_test(string $engine, array $settings): array
 {
-	$key = 'toc_test_' . uniqid();
+	// The key starts with the key salt, as the keys of the handler do. A Redis user can have an ACL that allows only the keys with this prefix.
+	$salt = (string) ($settings['cache_key_salt'] ?? '');
+
+	if ($salt === '') {
+		$salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
+	}
+
+	$key = $salt . ':toc_test_' . uniqid();
 
 	try {
 		if ($engine === 'redis') {
