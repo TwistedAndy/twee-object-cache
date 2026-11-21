@@ -230,4 +230,37 @@
 		display: flex;
 		gap: 10px;
 	}
+
+	// The tables of the Statistics tab
+	.widefat {
+		.number {
+			text-align: right;
+			white-space: nowrap;
+			font-variant-numeric: tabular-nums;
+		}
+
+		.key {
+			width: 25%;
+			word-break: break-all;
+		}
+
+		.date {
+			white-space: nowrap;
+		}
+	}
+
+	.value {
+		max-height: 240px;
+		margin: 0;
+		overflow: auto;
+		font-size: 12px;
+		white-space: pre-wrap;
+		word-break: break-all;
+	}
+
+	.pages {
+		display: flex;
+		margin-top: 12px;
+		gap: 8px;
+	}
 }

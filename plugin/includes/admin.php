@@ -132,11 +132,12 @@ function toc_admin_bar(WP_Admin_Bar $admin_bar): void
 
 			$rows['engine'][1] = $wp_object_cache->active ? 'Connected' : 'Not connected';
 			$rows['ratio'] = ['Hit ratio', $ratio . '% (' . number_format_i18n($hits) . ' / ' . number_format_i18n($misses) . ')'];
-			$rows['reads'] = ['Backend reads', number_format_i18n($wp_object_cache->cache_loads)];
+			$rows['reads'] = [$engines[$engine] . ' reads', number_format_i18n($wp_object_cache->cache_loads)];
 		}
 
-		// The first row adds the styles of the rows: the label at the left and the value at the right
-		$meta = ['html' => '<style>#wpadminbar #wp-admin-bar-twee-cache-info{padding:9px 0}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item{display:flex;justify-content:space-between;gap:24px;height:20px;line-height:20px}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item span+span{color:#f0f0f1;font-variant-numeric:tabular-nums}</style>'];
+		// The first row adds the styles of the rows: the label at the left and the value at the right.
+		// The Admin Bar gives each element a line height of 32px, so the text in a row of 20px moves down without the inherit rule.
+		$meta = ['html' => '<style>#wpadminbar #wp-admin-bar-twee-cache-info{padding:9px 0}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item{display:flex;justify-content:space-between;gap:24px;height:20px;line-height:20px}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item *{line-height:inherit}#wpadminbar #wp-admin-bar-twee-cache-info .ab-item span+span{color:#f0f0f1;font-variant-numeric:tabular-nums}</style>'];
 
 		foreach ($rows as $id => $row) {
 			$admin_bar->add_node([

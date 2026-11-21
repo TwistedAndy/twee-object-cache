@@ -77,6 +77,24 @@ Use a handler without the plugin on a production site that does not need the **C
 - Backend initialization failures create WordPress admin notices. Runtime Redis errors use `E_USER_NOTICE`; Memcached and selected APCu errors use `E_USER_WARNING`. Display and logging follow the site's PHP and WordPress error configuration.
 - On detected Redis or Memcached failures, the drop-in creates the `wp-content/cache-flush` marker. The Cache Settings page also creates it when it saves the settings or turns on the cache, and the drop-in of the plugin creates it when it finds no handler. On a later successful initialization, Redis deletes all keys with the key salt, Memcached changes the site version, and APCu flushes its keys before the marker is removed. This best-effort recovery requires the deployed drop-in directory to be writable.
 
+## Statistics
+
+The **Statistics** tab of the **Cache Settings** page shows the backend that the site uses now. It needs the cache to be on and connected. The tab reads the backend each time it opens, so it does not change the speed of other pages.
+
+- The key salt and the server details, such as the version, the memory and the number of keys.
+- The latency: the average, minimum, 95th percentile and maximum time of 100 writes and 100 reads of a 1 KB value. The writes and reads use the serializer and the compression of the handler.
+- The cache groups of the site, with the number of keys and the size of each group. A page shows 100 groups, and the largest group shows first.
+- Select a group to see its keys, with the stored size, the expiration time and the value. A page shows 100 keys, and a value shows its first 10,000 characters.
+- To delete groups or keys, select their checkboxes, then select **Clean Selected**. A group is cleaned with `wp_cache_flush_group()`, and keys with `wp_cache_delete_multiple()`. WordPress and the plugins make a deleted value again when they need it.
+
+The values can contain private data, such as the options of plugins. Only a user who can change the settings can open the tab.
+
+The backends give the data in different ways:
+
+- **Redis** keeps each group in a hash. The size of a group is the memory of the hash, which Redis estimates from 5 of its fields (`MEMORY USAGE`). The estimate does not block Redis on a large group.
+- **APCu** gives the memory of each key.
+- **Memcached** cannot list its keys through the PHP extension, so the tab sends `lru_crawler metadump all` to each server. This command needs Memcached 1.4.31 or later. A flush of the site or of a group changes its version, and the keys of old versions stay until they expire or Memcached evicts them. The tab shows them as stale keys.
+
 ## Query Monitor
 
 When [Query Monitor](https://wordpress.org/plugins/query-monitor/) is active, the plugin replaces its **Object Cache** panel. The panel shows data that the drop-in collects on each request, so it does not make the cache slower:
@@ -168,6 +186,7 @@ On the default ports, the page sends `PING` to Redis and `version` to Memcached.
 │   └── includes/
 │       ├── admin.php          Admin Bar menu and its actions
 │       ├── dropin.php         Drop-in file, engine detection, Query Monitor connection
+│       ├── groups.php         Latency test and cache groups of the Statistics tab, loaded only on this tab
 │       ├── monitor.php        Query Monitor panel
 │       ├── settings.php       Cache Settings page, the toc_settings option
 │       └── update.php         Updates from GitHub, loaded only when WordPress examines the updates

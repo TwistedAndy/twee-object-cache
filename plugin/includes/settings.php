@@ -69,13 +69,48 @@ function toc_settings_menu(): void
 
 
 /**
- * Load the styles of the page and save the settings of the form
+ * Load the styles of the page, clean the selected groups or keys of the Statistics tab, and save the settings of the form
  *
  * When the cache is on, the drop-in holds a copy of the settings, so it is written again.
  */
 function toc_settings_action(): void
 {
 	wp_enqueue_style('toc_cache', plugins_url('assets/css/cache.css', __DIR__), [], (string) filemtime(dirname(__DIR__) . '/assets/css/cache.css'));
+
+	if (!empty($_POST['toc_clean'])) {
+		check_admin_referer('toc_clean');
+
+		// The group list sends the groups. The page of a group sends its name and the keys.
+		$group = wp_unslash((string) ($_POST['group'] ?? ''));
+		$names = array_map('strval', (array) wp_unslash($_POST[$group === '' ? 'groups' : 'keys'] ?? []));
+		$blog_id = get_current_blog_id();
+
+		if (!$names) {
+			add_settings_error('toc', 'toc_clean', 'Select the ' . ($group === '' ? 'groups' : 'keys') . ' to clean.', 'error');
+
+			return;
+		}
+
+		foreach ($group === '' ? $names : [$group] as $name) {
+			// On multisite, the name of a group that is not global starts with the site ID
+			if (is_multisite() and preg_match('/^(\d+):(.+)$/s', $name, $match)) {
+				wp_cache_switch_to_blog((int) $match[1]);
+				$name = $match[2];
+			}
+
+			if ($group === '') {
+				wp_cache_flush_group($name);
+			} else {
+				wp_cache_delete_multiple($names, $name);
+			}
+
+			wp_cache_switch_to_blog($blog_id);
+		}
+
+		add_settings_error('toc', 'toc_clean', count($names) . ($group === '' ? ' groups' : ' keys') . ' cleaned.', 'success');
+
+		return;
+	}
 
 	if (empty($_POST['toc_save'])) {
 		return;
@@ -94,8 +129,132 @@ function toc_settings_action(): void
  */
 function toc_settings_page(): void
 {
+	global $wp_object_cache;
+
 	$engine = toc_dropin_engine();
 	$names = ['redis' => 'Redis', 'memcached' => 'Memcached', 'apcu' => 'APCu'];
+	$tab = (($_GET['tab'] ?? '') === 'stats') ? 'stats' : 'settings';
+	$stats_url = add_query_arg('tab', 'stats', toc_settings_url());
+
+	echo '<div class="wrap cache_box"><h1>Cache Settings</h1>';
+
+	// The cache is flushed after a save, so the notices of the save show in the same request and not through a transient after a redirect.
+	// WordPress shows them under Settings, but not in the Network Admin.
+	if (is_network_admin()) {
+		settings_errors('toc');
+	}
+
+	echo '<nav class="nav-tab-wrapper"><a class="nav-tab' . ($tab === 'settings' ? ' nav-tab-active' : '') . '" href="' . esc_url(toc_settings_url()) . '">Settings</a><a class="nav-tab' . ($tab === 'stats' ? ' nav-tab-active' : '') . '" href="' . esc_url($stats_url) . '">Statistics</a></nav>';
+
+	if ($tab === 'stats') {
+		// Only a connected Twee handler has debug_info() and the active property
+		if ($engine === '' or !method_exists($wp_object_cache, 'debug_info') or !$wp_object_cache->active) {
+			echo '<div class="notice notice-info inline"><p>Enable the cache on the Settings tab to see the statistics.</p></div></div>';
+
+			return;
+		}
+
+		require_once __DIR__ . '/groups.php';
+
+		$group = wp_unslash((string) ($_GET['group'] ?? ''));
+		$page = max(1, (int) ($_GET['paged'] ?? 1));
+
+		echo '<div class="sections">';
+
+		if ($group === '') {
+			$details = $wp_object_cache->debug_info()['details'];
+			$latency = toc_groups_latency();
+			$scan = toc_groups_scan();
+
+			// The latency test replaces the single PING of Query Monitor
+			unset($details['Latency']);
+
+			echo '<section class="section"><div class="contents contents_split"><h2>' . $names[$engine] . '</h2><span class="caption caption_success">Connected</span><div class="buttons"><a class="button" href="' . esc_url($stats_url) . '" title="Do the latency test and read the groups again">Refresh</a></div></div><table class="widefat striped"><tbody>';
+
+			foreach ($details as $label => $value) {
+				echo '<tr><th>' . esc_html($label) . '</th><td>' . esc_html(is_numeric($value) ? number_format_i18n($value) : (string) $value) . '</td></tr>';
+			}
+
+			echo '</tbody></table></section>';
+
+			echo '<section class="section"><div class="contents"><h2>Latency</h2><span class="text">100 writes and 100 reads of a 1 KB value with the serializer of the handler</span></div>';
+
+			if (isset($latency['error'])) {
+				echo '<div class="notice notice-error inline"><p>' . esc_html($latency['error']) . '</p></div>';
+			} else {
+				echo '<table class="widefat striped"><thead><tr><th>Operation</th><th class="number">Average</th><th class="number">Minimum</th><th class="number">95th percentile</th><th class="number">Maximum</th></tr></thead><tbody>';
+
+				foreach ($latency as $operation => $values) {
+					echo '<tr><th>' . ucfirst($operation) . '</th>';
+
+					foreach ($values as $value) {
+						echo '<td class="number">' . number_format_i18n($value, 1) . ' µs</td>';
+					}
+
+					echo '</tr>';
+				}
+
+				echo '</tbody></table>';
+			}
+
+			echo '</section><section class="section"><div class="contents contents_split"><h2>Groups</h2>';
+
+			if (isset($scan['error'])) {
+				echo '</div><div class="notice notice-error inline"><p>' . esc_html($scan['error']) . '</p></div></section>';
+			} else {
+				$keys = array_sum(array_column($scan['groups'], 'keys'));
+				$bytes = array_sum(array_column($scan['groups'], 'bytes'));
+				$text = count($scan['groups']) . ' groups, ' . number_format_i18n($keys) . ' keys, ' . size_format($bytes, 1) . '.';
+
+				if ($scan['stale']['keys']) {
+					$text .= ' ' . number_format_i18n($scan['stale']['keys']) . ' stale keys (' . size_format($scan['stale']['bytes'], 1) . ') of old versions stay until they expire or Memcached evicts them.';
+				}
+
+				// The button is in the header, so it names the form of the table
+				echo '<span class="text">' . $text . ' Select a group to see its values.</span><div class="buttons"><button type="submit" form="toc-clean" name="toc_clean" value="1" class="button" title="Delete the keys of the selected groups">Clean Selected</button></div></div>';
+				echo '<form id="toc-clean" method="post">' . wp_nonce_field('toc_clean', '_wpnonce', true, false) . '<table class="widefat striped"><thead><tr><td class="manage-column check-column"><input type="checkbox" title="Select all"></td><th>Group</th><th class="number">Keys</th><th class="number">Size</th></tr></thead><tbody>';
+
+				// The scan gives the groups from the largest, and a page shows 100 of them
+				foreach (array_slice($scan['groups'], ($page - 1) * 100, 100, true) as $name => $group_stats) {
+					echo '<tr><th scope="row" class="check-column"><input type="checkbox" name="groups[]" value="' . esc_attr((string) $name) . '"></th><td><a href="' . esc_url(add_query_arg('group', rawurlencode((string) $name), $stats_url)) . '">' . esc_html((string) $name) . '</a></td><td class="number">' . number_format_i18n($group_stats['keys']) . '</td><td class="number">' . size_format($group_stats['bytes'], 1) . '</td></tr>';
+				}
+
+				echo '</tbody></table><div class="pages">' . paginate_links(['base' => add_query_arg('paged', '%#%'), 'format' => '', 'current' => $page, 'total' => (int) ceil(count($scan['groups']) / 100)]) . '</div></form></section>';
+			}
+		} else {
+			$result = toc_groups_items($group, $page);
+
+			echo '<section class="section"><div class="contents contents_split"><h2>' . esc_html($group) . '</h2>' . (isset($result['total']) ? '<span class="caption">' . number_format_i18n($result['total']) . ' keys</span>' : '') . '<div class="buttons">' . (empty($result['items']) ? '' : '<button type="submit" form="toc-clean" name="toc_clean" value="1" class="button" title="Delete the selected keys">Clean Selected</button>') . '<a class="button" href="' . esc_url($stats_url) . '">All Groups</a></div></div>';
+
+			if (isset($result['error'])) {
+				echo '<div class="notice notice-error inline"><p>' . esc_html($result['error']) . '</p></div>';
+			} elseif (!$result['items']) {
+				echo '<p>The group has no keys. They expired, or the backend evicted them.</p>';
+			} else {
+				echo '<form id="toc-clean" method="post">' . wp_nonce_field('toc_clean', '_wpnonce', true, false) . '<input type="hidden" name="group" value="' . esc_attr($group) . '"><table class="widefat striped"><thead><tr><td class="manage-column check-column"><input type="checkbox" title="Select all"></td><th class="key">Key</th><th class="number">Size</th><th class="date">Expires</th><th>Value</th></tr></thead><tbody>';
+
+				foreach ($result['items'] as $key => $item) {
+					$value = is_string($item['value']) ? $item['value'] : ((is_array($item['value']) or is_object($item['value'])) ? print_r($item['value'], true) : var_export($item['value'], true));
+
+					// A large value shows only its start
+					if (mb_strlen($value) > 10000) {
+						$value = mb_substr($value, 0, 10000) . "\n…";
+					}
+
+					echo '<tr><th scope="row" class="check-column"><input type="checkbox" name="keys[]" value="' . esc_attr((string) $key) . '"></th><td class="key">' . esc_html((string) $key) . '</td><td class="number">' . size_format($item['size'], 1) . '</td><td class="date">' . ($item['expires'] ? esc_html(wp_date('Y-m-d H:i:s', $item['expires'])) : 'Never') . '</td><td><pre class="value">' . esc_html($value) . '</pre></td></tr>';
+				}
+
+				echo '</tbody></table><div class="pages">' . paginate_links(['base' => add_query_arg('paged', '%#%'), 'format' => '', 'current' => $page, 'total' => (int) ceil($result['total'] / 100)]) . '</div></form>';
+			}
+
+			echo '</section>';
+		}
+
+		echo '</div></div>';
+
+		return;
+	}
+
 	$loaded = ['redis' => extension_loaded('redis'), 'memcached' => extension_loaded('memcached'), 'apcu' => extension_loaded('apcu')];
 	$supported = toc_settings_supported();
 	$test = null;
@@ -141,14 +300,6 @@ function toc_settings_page(): void
 		}
 	}
 
-	echo '<div class="wrap cache_box"><h1>Cache Settings</h1>';
-
-	// The cache is flushed after a save, so the notices of the save show in the same request and not through a transient after a redirect.
-	// WordPress shows them under Settings, but not in the Network Admin.
-	if (is_network_admin()) {
-		settings_errors('toc');
-	}
-
 	if ($test) {
 		echo '<div class="notice inline ' . ($test['ok'] ? 'notice-success' : 'notice-error') . '"><p><strong>' . ($test['ok'] ? 'The test passed.' : 'The test failed.') . '</strong> ' . esc_html($test['message']) . '</p></div>';
 	}
@@ -159,8 +310,6 @@ function toc_settings_page(): void
 		echo '<div class="notice notice-info inline"><p><strong>The connection fields show the values found on this server or the defaults.</strong> They are not saved. Select Test Connection to examine them, then select Save Changes.</p></div>';
 	} elseif (!$saved and $sources) {
 		echo '<div class="notice notice-info inline"><p><strong>The form shows the settings found on this server.</strong> Sources: ' . $sources . '. Select Test Connection to examine them, then select Save Changes or Enable Cache.</p></div>';
-	} elseif ($hints) {
-		echo '<div class="notice notice-info inline"><p><strong>Some settings found on this server are different.</strong> They show under the fields. Sources: ' . $sources . '.</p></div>';
 	}
 
 	echo '<form method="post"><div class="sections">';

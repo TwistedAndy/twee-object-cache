@@ -546,47 +546,7 @@ class WP_Object_Cache {
 
 	public function decr(int|string $key, int $offset = 1, string $group = 'default'): int|bool
 	{
-		if ($group === '') {
-			$group = 'default';
-		}
-
-		if (isset($this->non_persistent_groups[$group]) or !$this->active) {
-			$value = $this->get($key, $group);
-
-			if ($value === false or !is_numeric($value)) {
-				return false;
-			}
-
-			$value = (int) $value - $offset;
-			$this->cache[$group][$key] = $value;
-
-			return $value;
-		}
-
-		$cache_key = $this->build_key($key, $group);
-
-		$exists = apcu_exists($cache_key);
-
-		if (!$exists) {
-			return false;
-		}
-
-		$success = false;
-
-		// APCu handles decrementing natively
-		$value = apcu_dec($cache_key, $offset, $success);
-
-		if ($success) {
-			$this->cache[$group][$key] = $value;
-
-			return $value;
-		}
-
-		if (!apcu_enabled()) {
-			$this->handle_error('apcu_enabled() returned false after failed apcu_dec()');
-		}
-
-		return false;
+		return $this->incr($key, -$offset, $group);
 	}
 
 	public function flush(): bool

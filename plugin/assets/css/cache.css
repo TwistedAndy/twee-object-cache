@@ -193,3 +193,28 @@
   display: flex;
   gap: 10px;
 }
+.cache_box .widefat .number {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cache_box .widefat .key {
+  width: 25%;
+  word-break: break-all;
+}
+.cache_box .widefat .date {
+  white-space: nowrap;
+}
+.cache_box .value {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.cache_box .pages {
+  display: flex;
+  margin-top: 12px;
+  gap: 8px;
+}
