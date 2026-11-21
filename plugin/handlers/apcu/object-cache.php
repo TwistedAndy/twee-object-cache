@@ -173,6 +173,11 @@ function wp_cache_reset()
 #[AllowDynamicProperties]
 class WP_Object_Cache {
 
+	/**
+	 * The engine of this drop-in. The Twee Cache plugin reads it to find its drop-in.
+	 */
+	const TWEE_CACHE = 'apcu';
+
 	public int $cache_hits = 0;
 
 	public int $cache_misses = 0;
@@ -201,12 +206,33 @@ class WP_Object_Cache {
 
 	private string $key_salt = '';
 
-	private bool $active = true;
+	/**
+	 * False when the backend is not available. The Admin Bar of the plugin reads it.
+	 */
+	public bool $active = true;
+
+	/**
+	 * The error messages of the request
+	 */
+	private array $errors = [];
 
 	public function __construct()
 	{
-		if (defined('WP_APCU_PERSISTENT_GROUPS') and WP_APCU_PERSISTENT_GROUPS !== '') {
-			$groups = is_string(WP_APCU_PERSISTENT_GROUPS) ? explode(',', WP_APCU_PERSISTENT_GROUPS) : WP_APCU_PERSISTENT_GROUPS;
+		// The settings of the Cache Settings page, from the object-cache.php that the plugin writes. A constant in wp-config.php wins over a setting. The constant of a key is WP_ and the key in upper case.
+		$config = defined('TWEE_CACHE_CONFIG') ? TWEE_CACHE_CONFIG : [];
+
+		foreach (['apcu_persistent_groups', 'cache_key_salt'] as $key) {
+			$constant = 'WP_' . strtoupper($key);
+
+			if (defined($constant)) {
+				$config[$key] = constant($constant);
+			}
+		}
+
+		$groups = $config['apcu_persistent_groups'] ?? null;
+
+		if ($groups !== null and $groups !== '') {
+			$groups = is_string($groups) ? explode(',', $groups) : $groups;
 
 			if (is_array($groups)) {
 				$this->persistent_groups = [];
@@ -223,7 +249,7 @@ class WP_Object_Cache {
 		}
 
 		// The host name changes between multisite hosts, so the default salt uses the database
-		$this->key_salt = defined('WP_CACHE_KEY_SALT') ? (string) WP_CACHE_KEY_SALT : '';
+		$this->key_salt = (string) ($config['cache_key_salt'] ?? '');
 
 		if ($this->key_salt === '') {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
@@ -237,7 +263,7 @@ class WP_Object_Cache {
 		$this->active = (function_exists('apcu_enabled') and apcu_enabled());
 
 		// The Cache Settings page and failed writes of the other drop-ins ask for a flush with the marker
-		$flag_file = __DIR__ . '/cache-flush';
+		$flag_file = WP_CONTENT_DIR . '/cache-flush';
 
 		if ($this->active and file_exists($flag_file) and $this->flush()) {
 			@unlink($flag_file);
@@ -659,14 +685,52 @@ class WP_Object_Cache {
 	}
 
 	/**
+	 * Get the details of the cache for the Query Monitor panel
+	 *
+	 * @return array The engine, the status, the details, the runtime groups and the errors
+	 */
+	public function debug_info(): array
+	{
+		$details = [
+			'Key salt' => $this->key_salt,
+		];
+
+		if ($this->active) {
+			$cache = apcu_cache_info(true);
+			$memory = apcu_sma_info(true);
+
+			$details['Memory'] = size_format((int) ($cache['mem_size'] ?? 0)) . ' / ' . size_format((int) (($memory['num_seg'] ?? 0) * ($memory['seg_size'] ?? 0)));
+			$details['Keys'] = $cache['num_entries'] ?? 0;
+		}
+
+		$groups = [];
+
+		foreach ($this->cache as $group => $values) {
+			$groups[$group] = [
+				'entries' => count($values),
+				'type'    => isset($this->non_persistent_groups[$group]) ? 'non-persistent' : (isset($this->global_groups[$group]) ? 'global' : ''),
+			];
+		}
+
+		return [
+			'engine'  => 'APCu',
+			'active'  => $this->active,
+			'details' => $details,
+			'groups'  => $groups,
+			'errors'  => $this->errors,
+		];
+	}
+
+	/**
 	 * Deactivate the cache for the rest of a request and trigger
 	 * a failure via trigger_error() with WP_DEBUG support
 	 */
 	private function handle_error(string $message): void
 	{
+		$this->errors[] = $message;
 		$this->active = false;
 
-		$flag_file = __DIR__ . '/cache-flush';
+		$flag_file = WP_CONTENT_DIR . '/cache-flush';
 
 		if (!file_exists($flag_file)) {
 			@touch($flag_file);

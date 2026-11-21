@@ -192,7 +192,6 @@ function toc_settings_page(): void
 			}
 
 			$items .= '</select></div><span class="text">When the cache is on, Save Changes writes the drop-in again.</span>' . (isset($hints['handler']) ? '<span class="text text_found">Found on this server: ' . $names[$hints['handler']] . '</span>' : '') . '</div>';
-			$options = '<label class="option"><input type="checkbox" name="trace" value="1"' . checked($settings['trace'], true, false) . '><span class="details"><span class="label">Tracing</span><span class="text">Record the backend calls for Query Monitor. Each call keeps a backtrace in memory, so use it only on development sites.</span></span></label>';
 		} else {
 			// Only the section of the selected handler shows, so its buttons use the selected handler. APCu has no connection fields to reset.
 			$buttons = '<button type="submit" name="toc_test" value="1" class="button" title="Connect with the values of the form, then write, read and delete a test key. The values are not saved.">Test Connection</button>';
@@ -514,7 +513,7 @@ function toc_settings_supported(): array
  *
  * @param array|null $input The values of the form or of the detection, or null for the saved settings
  *
- * @return array The handler, the trace flag and the value of each field in TOC_SETTINGS
+ * @return array The handler and the value of each field in TOC_SETTINGS
  */
 function toc_settings_get(?array $input = null): array
 {
@@ -528,7 +527,6 @@ function toc_settings_get(?array $input = null): array
 
 	$settings = [
 		'handler' => in_array($handler, ['redis', 'memcached', 'apcu'], true) ? $handler : '',
-		'trace'   => !empty($values['trace']),
 	];
 
 	// The switches with the default null are on when the server supports them, as in the drop-ins

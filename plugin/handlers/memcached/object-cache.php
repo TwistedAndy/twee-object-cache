@@ -173,6 +173,11 @@ function wp_cache_reset()
 #[AllowDynamicProperties]
 class WP_Object_Cache
 {
+	/**
+	 * The engine of this drop-in. The Twee Cache plugin reads it to find its drop-in.
+	 */
+	const TWEE_CACHE = 'memcached';
+
 	public int $cache_hits = 0;
 
 	public int $cache_misses = 0;
@@ -208,7 +213,15 @@ class WP_Object_Cache
 	 */
 	private string $site_salt = '';
 
-	private bool $active = false;
+	/**
+	 * False when the backend is not available. The Admin Bar of the plugin reads it.
+	 */
+	public bool $active = false;
+
+	/**
+	 * The error messages of the request
+	 */
+	private array $errors = [];
 
 	private Memcached $memcached;
 
@@ -218,8 +231,21 @@ class WP_Object_Cache
 
 	public function __construct()
 	{
-		if (defined('WP_MEMCACHED_PERSISTENT_GROUPS') and WP_MEMCACHED_PERSISTENT_GROUPS !== '') {
-			$groups = is_string(WP_MEMCACHED_PERSISTENT_GROUPS) ? explode(',', WP_MEMCACHED_PERSISTENT_GROUPS) : WP_MEMCACHED_PERSISTENT_GROUPS;
+		// The settings of the Cache Settings page, from the object-cache.php that the plugin writes. A constant in wp-config.php wins over a setting. The constant of a key is WP_ and the key in upper case.
+		$config = defined('TWEE_CACHE_CONFIG') ? TWEE_CACHE_CONFIG : [];
+
+		foreach (['memcached_persistent_groups', 'cache_key_salt', 'memcached_connect_timeout', 'memcached_send_timeout', 'memcached_recv_timeout', 'memcached_igbinary'] as $key) {
+			$constant = 'WP_' . strtoupper($key);
+
+			if (defined($constant)) {
+				$config[$key] = constant($constant);
+			}
+		}
+
+		$groups = $config['memcached_persistent_groups'] ?? null;
+
+		if ($groups !== null and $groups !== '') {
+			$groups = is_string($groups) ? explode(',', $groups) : $groups;
 
 			if (is_array($groups)) {
 				$this->persistent_groups = [];
@@ -236,7 +262,7 @@ class WP_Object_Cache
 		}
 
 		// The host name changes between web, WP-CLI and multisite requests, so the default salt uses the database
-		$this->key_salt = defined('WP_CACHE_KEY_SALT') ? (string) WP_CACHE_KEY_SALT : '';
+		$this->key_salt = (string) ($config['cache_key_salt'] ?? '');
 
 		if ($this->key_salt === '') {
 			$this->key_salt = preg_replace('/[^a-zA-Z0-9_]/', '_', (defined('DB_NAME') ? DB_NAME : '') . '_' . ($GLOBALS['table_prefix'] ?? 'wp_'));
@@ -249,9 +275,11 @@ class WP_Object_Cache
 
 		global $memcached_servers;
 
-		// The servers come from the $memcached_servers global of wp-config.php
+		// The $memcached_servers global of wp-config.php wins over the setting
 		if (!empty($memcached_servers) and is_array($memcached_servers)) {
 			$servers = $memcached_servers;
+		} elseif (!empty($config['memcached_servers']) and is_array($config['memcached_servers'])) {
+			$servers = $config['memcached_servers'];
 		} else {
 			$servers = [
 				['127.0.0.1', 11211],
@@ -271,9 +299,9 @@ class WP_Object_Cache
 			}
 		}
 
-		$connect_timeout = defined('WP_MEMCACHED_CONNECT_TIMEOUT') ? (int) WP_MEMCACHED_CONNECT_TIMEOUT : 250;
-		$send_timeout = defined('WP_MEMCACHED_SEND_TIMEOUT') ? (int) WP_MEMCACHED_SEND_TIMEOUT : 250;
-		$recv_timeout = defined('WP_MEMCACHED_RECV_TIMEOUT') ? (int) WP_MEMCACHED_RECV_TIMEOUT : 250;
+		$connect_timeout = (int) ($config['memcached_connect_timeout'] ?? 250);
+		$send_timeout = (int) ($config['memcached_send_timeout'] ?? 250);
+		$recv_timeout = (int) ($config['memcached_recv_timeout'] ?? 250);
 
 		if ($connect_timeout <= 0) {
 			$connect_timeout = 250;
@@ -287,7 +315,7 @@ class WP_Object_Cache
 			$recv_timeout = 250;
 		}
 
-		if ((!defined('WP_MEMCACHED_IGBINARY') or WP_MEMCACHED_IGBINARY) and defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
+		if (($config['memcached_igbinary'] ?? true) and defined('Memcached::HAVE_IGBINARY') and Memcached::HAVE_IGBINARY and function_exists('igbinary_serialize')) {
 			$this->serializer = 'igbinary_serialize';
 			$this->unserializer = 'igbinary_unserialize';
 			$serializer = Memcached::SERIALIZER_IGBINARY;
@@ -347,7 +375,7 @@ class WP_Object_Cache
 		}
 
 		// Flush stale cache if the server was previously offline
-		$flag_file = __DIR__ . '/cache-flush';
+		$flag_file = WP_CONTENT_DIR . '/cache-flush';
 
 		if ($this->active) {
 			if (file_exists($flag_file) and $this->flush()) {
@@ -998,10 +1026,68 @@ class WP_Object_Cache
 	}
 
 	/**
+	 * Get the details of the cache for the Query Monitor panel
+	 *
+	 * @return array The engine, the status, the details, the runtime groups and the errors
+	 */
+	public function debug_info(): array
+	{
+		$details = [
+			'Key salt' => $this->key_salt,
+		];
+
+		if ($this->active) {
+			$start = hrtime(true);
+			$this->memcached->getVersion();
+			$latency = hrtime(true) - $start;
+
+			$versions = [];
+			$bytes = 0;
+			$limit = 0;
+			$keys = 0;
+
+			// The totals of all servers
+			foreach ((array) $this->memcached->getStats() as $data) {
+				if (is_array($data) and !empty($data['pid'])) {
+					$versions[] = $data['version'] ?? '';
+					$bytes += (int) ($data['bytes'] ?? 0);
+					$limit += (int) ($data['limit_maxbytes'] ?? 0);
+					$keys += (int) ($data['curr_items'] ?? 0);
+				}
+			}
+
+			$details['Servers'] = count($versions);
+			$details['Version'] = implode(', ', array_unique($versions));
+			$details['Memory'] = size_format($bytes) . ' / ' . size_format($limit);
+			$details['Keys'] = $keys;
+			$details['Latency'] = number_format($latency / 1e3) . ' µs';
+		}
+
+		$groups = [];
+
+		foreach ($this->cache as $group => $values) {
+			$groups[$group] = [
+				'entries' => count($values),
+				'type'    => isset($this->non_persistent_groups[$group]) ? 'non-persistent' : (isset($this->global_groups[$group]) ? 'global' : ''),
+			];
+		}
+
+		return [
+			'engine'  => 'Memcached',
+			'active'  => $this->active,
+			'details' => $details,
+			'groups'  => $groups,
+			'errors'  => $this->errors,
+		];
+	}
+
+	/**
 	 * Deactivate the cache and flag a full flush on a real outage or when forced
 	 */
 	private function handle_error(string $message, bool $disable = false): void
 	{
+		$this->errors[] = $message;
+
 		$active = false;
 		$stats = $disable ? false : $this->memcached->getStats();
 
@@ -1017,8 +1103,8 @@ class WP_Object_Cache
 		if (!$active) {
 			$this->active = false;
 
-			if (!file_exists(__DIR__ . '/cache-flush')) {
-				@touch(__DIR__ . '/cache-flush');
+			if (!file_exists(WP_CONTENT_DIR . '/cache-flush')) {
+				@touch(WP_CONTENT_DIR . '/cache-flush');
 			}
 		}
 

@@ -43,7 +43,7 @@ function toc_dropin_install(): bool
 {
 	$settings = (array) get_site_option('toc_settings', []);
 	$engine = (string) ($settings['handler'] ?? '');
-	$handler_file = WP_PLUGIN_DIR . '/' . dirname(plugin_basename(dirname(__DIR__) . '/twee-cache.php')) . '/handlers/' . $engine . '.php';
+	$handler_file = WP_PLUGIN_DIR . '/' . dirname(plugin_basename(dirname(__DIR__) . '/twee-cache.php')) . '/handlers/' . $engine . '/object-cache.php';
 
 	if ($engine === '' or !is_file($handler_file)) {
 		return false;
@@ -201,23 +201,14 @@ function toc_dropin_test(string $engine, array $settings): array
 
 
 /**
- * Add the Object Cache panels to Query Monitor
- *
- * Without Query Monitor, the drop-in stops the log of the backend calls that the Tracing setting started.
+ * Add the Object Cache panel to Query Monitor
  */
 function toc_dropin_monitor(): void
 {
 	global $wp_object_cache;
 
 	// Only the Twee drop-ins have debug_info()
-	if (!method_exists($wp_object_cache, 'debug_info')) {
-		return;
-	}
-
-	if (!class_exists('QM_Collectors')) {
-		$wp_object_cache->debug = false;
-		$wp_object_cache->commands = [];
-
+	if (!class_exists('QM_Collectors') or !method_exists($wp_object_cache, 'debug_info')) {
 		return;
 	}
 
@@ -227,12 +218,11 @@ function toc_dropin_monitor(): void
 
 	QM_Collectors::add($collector);
 
-	// Replace the Object Cache panel of Query Monitor (priority 9). The key of each output must be its panel id.
+	// Replace the Object Cache panel of Query Monitor (priority 9). The key of the output must be its panel id.
 	add_filter('qm/outputter/html', function(array $output) use ($collector): array {
 		unset($output['cache']);
 
 		$output['twee-cache'] = new Twee_Cache_QM_Output($collector);
-		$output['twee-cache-commands'] = new Twee_Cache_QM_Commands_Output($collector);
 
 		return $output;
 	}, 20);
@@ -243,58 +233,59 @@ function toc_dropin_monitor(): void
 			return;
 		}
 
-		$script = <<<'JS'
-(function() {
-	var target = %s;
-
-	// The text of a menu item without its badge
-	function label(item) {
-		var node = item.querySelector('button, a');
-
-		return (node && node.firstChild) ? node.firstChild.textContent.trim() : '';
-	}
-
-	function place(after, item) {
-		if (after && item && after.nextElementSibling !== item) {
-			after.after(item);
-		}
-	}
-
-	function sort() {
-		var bar = document.querySelector('#wp-admin-bar-query-monitor .ab-submenu');
-		var root = document.getElementById('query-monitor-container');
-		var menu = (root && root.shadowRoot) ? root.shadowRoot.querySelector('#qm-panel-menu > ul') : null;
-
-		if (bar) {
-			place(bar.querySelector(':scope > .qm-item-db_queries'), bar.querySelector(':scope > .qm-item-twee-cache'));
-		}
-
-		if (menu) {
-			var items = Array.from(menu.children);
-
-			place(items.find(function(item) { return label(item) === target; }), items.find(function(item) { return label(item) === 'Object Cache'; }));
-		}
-	}
-
-	// Query Monitor draws its menus on DOMContentLoaded and draws them again on changes
-	window.addEventListener('load', function() {
-		var root = document.getElementById('query-monitor-container');
-		var bar = document.getElementById('wp-admin-bar-query-monitor');
-
-		sort();
-
-		if (root && root.shadowRoot) {
-			new MutationObserver(sort).observe(root.shadowRoot, {childList: true, subtree: true});
-		}
-
-		if (bar) {
-			new MutationObserver(sort).observe(bar, {childList: true, subtree: true});
-		}
-	});
-})();
-JS;
-
 		wp_enqueue_script('query-monitor');
-		wp_add_inline_script('query-monitor', sprintf($script, wp_json_encode(__('Database Queries', 'query-monitor'))));
+
+		ob_start();
+		?>
+		(function() {
+			var target = <?php echo wp_json_encode(__('Database Queries', 'query-monitor')); ?>;
+
+			// The text of a menu item without its badge
+			function label(item) {
+				var node = item.querySelector('button, a');
+
+				return (node && node.firstChild) ? node.firstChild.textContent.trim() : '';
+			}
+
+			function place(after, item) {
+				if (after && item && after.nextElementSibling !== item) {
+					after.after(item);
+				}
+			}
+
+			function sort() {
+				var bar = document.querySelector('#wp-admin-bar-query-monitor .ab-submenu');
+				var root = document.getElementById('query-monitor-container');
+				var menu = (root && root.shadowRoot) ? root.shadowRoot.querySelector('#qm-panel-menu > ul') : null;
+
+				if (bar) {
+					place(bar.querySelector(':scope > .qm-item-db_queries'), bar.querySelector(':scope > .qm-item-twee-cache'));
+				}
+
+				if (menu) {
+					var items = Array.from(menu.children);
+
+					place(items.find(function(item) { return label(item) === target; }), items.find(function(item) { return label(item) === 'Object Cache'; }));
+				}
+			}
+
+			// Query Monitor draws its menus on DOMContentLoaded and draws them again on changes
+			window.addEventListener('load', function() {
+				var root = document.getElementById('query-monitor-container');
+				var bar = document.getElementById('wp-admin-bar-query-monitor');
+
+				sort();
+
+				if (root && root.shadowRoot) {
+					new MutationObserver(sort).observe(root.shadowRoot, {childList: true, subtree: true});
+				}
+
+				if (bar) {
+					new MutationObserver(sort).observe(bar, {childList: true, subtree: true});
+				}
+			});
+		})();
+		<?php
+		wp_add_inline_script('query-monitor', ob_get_clean());
 	});
 }

@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 /**
  * Get the URL of the Cache Settings page. On multisite, the page is in the Network Admin.
  *
- * The Admin Bar and Query Monitor show the link on the front end too, where settings.php does not load.
+ * The Admin Bar shows the link on the front end too, where settings.php does not load.
  */
 function toc_settings_url(): string
 {

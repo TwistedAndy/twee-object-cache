@@ -2,7 +2,7 @@
 
 **Twee Cache** is a suite of high-performance, lightweight object caches built for large-scale WordPress and WooCommerce projects. It provides drop-in replacements for WordPress's in-memory runtime cache, adding backend storage that persists between requests.
 
-This repository contains the Twee Cache plugin with drop-ins for three backends: **APCu**, **Memcached**, and **Redis**. It also contains a simple drop-in for each backend, for sites that do not use the plugin. The changes of each release are in [CHANGELOG.md](CHANGELOG.md).
+This repository contains the Twee Cache plugin with handlers for three backends: **APCu**, **Memcached**, and **Redis**. A handler also works as a drop-in without the plugin. The changes of each release are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Installation
 
@@ -25,14 +25,14 @@ New releases show up in **Dashboard → Updates**. The drop-in loads the handler
 
 ### 2. Manual Drop-in Installation
 
-The `dropins/` folder has a simple drop-in for each backend, for production sites that do not need the plugin. A simple drop-in has the same cache code as the handler of the plugin, but it does not record the backend calls, read the settings of the **Cache Settings** page or show data in Query Monitor. Thus, it does less work on each request.
+Use a handler without the plugin on a production site that does not need the **Cache Settings** page.
 
 - Make sure that Redis or Memcached is reachable, or APCu is enabled, and install the PHP extension for it.
-- Copy `dropins/apcu/object-cache.php`, `dropins/memcached/object-cache.php`, or `dropins/redis/object-cache.php` to `wp-content/object-cache.php`.
+- Copy `object-cache.php` from `plugin/handlers/apcu/`, `plugin/handlers/memcached/`, or `plugin/handlers/redis/` to `wp-content/`.
 - Set the values with constants in `wp-config.php`, such as `WP_REDIS_HOST` and `WP_REDIS_PASSWORD`. See [Configuration](#configuration). Without constants, the drop-in uses the defaults.
 - WordPress detects the drop-in and starts the persistent cache.
 - To update the drop-in, copy the new version. To flush the cache before the first read of the new version, create `wp-content/cache-flush`.
-- The plugin does not manage a simple drop-in. When the plugin is active, the **Cache Settings** page shows that another plugin installed `object-cache.php`.
+- When you activate the plugin later, it manages the copy as its own drop-in. **Save Changes** and **Enable Cache** replace it with the drop-in of the plugin.
 
 ## Features
 
@@ -87,21 +87,14 @@ When [Query Monitor](https://wordpress.org/plugins/query-monitor/) is active, th
 - The errors of the request.
 - The groups in the runtime cache, with their type and number of entries.
 
-Turn on **Tracing** on the **Cache Settings** page to log each backend call. Then the panel also shows the number of backend calls, their total time, and their share of the request time. The **Commands** panel under it lists each call with its key, caller, component and time. You can filter the list by command and by component.
-
-- When tracing is off, the panels show a message about it.
-- The log stops at `plugins_loaded` when Query Monitor is not active.
-- Without the log, each backend call adds two boolean checks. Runtime cache hits do not change.
-- The log records a backtrace for each backend call, so use it only on development sites.
-- The panels need the plugin and its drop-in. With a simple drop-in, Query Monitor shows its own panel.
-- Query Monitor shows the panels of plugins after its own panels. A small script moves **Object Cache** below **Database Queries** in both Query Monitor menus.
+The panel needs the plugin. With a handler copied by hand and no plugin, Query Monitor shows its own panel. Query Monitor shows the panels of plugins after its own panels, so a small script moves **Object Cache** below **Database Queries** in both Query Monitor menus.
 
 ## Configuration
 
-Configuration values are optional when the built-in local defaults suit the environment. Set them on the **Cache Settings** page, or define constants in `wp-config.php` before WordPress loads the object-cache drop-in. A simple drop-in reads the constants only.
+Configuration values are optional when the built-in local defaults suit the environment. Set them on the **Cache Settings** page, or define constants in `wp-config.php` before WordPress loads the object-cache drop-in. A handler copied by hand reads the constants only.
 
 - The page saves the settings in the `toc_settings` site option. A key is the name of its constant in lower case and without `WP_`, such as `redis_host` for `WP_REDIS_HOST`.
-- When the cache is on, the plugin writes `wp-content/object-cache.php`. This file holds a copy of the settings in the `TWEE_CACHE_CONFIG` constant and loads the handler from `handlers/` in the plugin folder. OPcache keeps it in memory. When the plugin folder does not exist, WordPress uses its own cache.
+- When the cache is on, the plugin writes `wp-content/object-cache.php`. This file holds a copy of the settings in the `TWEE_CACHE_CONFIG` constant and loads the handler from `handlers/<engine>/object-cache.php` in the plugin folder. OPcache keeps it in memory. When the plugin folder does not exist, WordPress uses its own cache.
 - A constant in `wp-config.php` wins over the value on the page. The page shows the field as read-only.
 - **Test Connection** in the section of the handler connects to the backend with the values of the form, then writes, reads and deletes a test key. It does not save the values. When the test fails, the message gives the reason. For example, when Redis needs a password and the **Password** field is empty, the message tells where to find the password. A failed Memcached test names the servers and the reason, such as a timeout.
 - When the cache is on, **Save Changes** tests the new values first and saves them only when the test passes. When the test fails, the form keeps the values that you typed. After a save, the plugin writes the drop-in again with the new values.
@@ -110,7 +103,6 @@ Configuration values are optional when the built-in local defaults suit the envi
 - The page finds the settings of the host and of other object cache plugins each time it opens. When no settings are saved, the form shows the found settings, and **Enable Cache** saves them. When a found value is different from the value of the form, it shows under the field. The page does not show a found password. See [Detection](#detection).
 - When the PHP extensions of the server do not support igbinary, compression or Relay, the page turns off the switch, shows it as unavailable, and does not suggest a found value for it.
 - **Reset Connection** in the Redis and Memcached sections fills the connection fields with the found values or the defaults: the host, the port, the user, the password, the database, the timeouts, the retry interval and the Memcached servers. The other fields keep their values. It does not save the values.
-- **Tracing** logs the backend calls for the Query Monitor panel. See [Query Monitor](#query-monitor).
 - The time fields show their unit after the field: `s` for the Redis timeout and `ms` for the other timeouts and the retry interval.
 - On a site with more than one web server, the page changes the files only on the server that handles the request. Use constants on these sites.
 
@@ -171,15 +163,14 @@ On the default ports, the page sends `PING` to Redis and `version` to Memcached.
 ```
 ├── plugin/                    The plugin, as it is installed in wp-content/plugins/twee-cache/
 │   ├── twee-cache.php         Loads the includes and the settings page in wp-admin, adds the hooks, writes the drop-in again on activation, removes it on deactivation
-│   ├── handlers/              The handlers that the drop-in loads: apcu.php, memcached.php, redis.php
+│   ├── handlers/              The handlers that the drop-in loads: apcu/, memcached/, redis/, each with object-cache.php
 │   ├── assets/                Styles of the Cache Settings page: scss/ sources, css/ built with gulp or sass
 │   └── includes/
 │       ├── admin.php          Admin Bar menu and its actions
 │       ├── dropin.php         Drop-in file, engine detection, Query Monitor connection
-│       ├── monitor.php        Query Monitor panels
+│       ├── monitor.php        Query Monitor panel
 │       ├── settings.php       Cache Settings page, the toc_settings option
 │       └── update.php         Updates from GitHub, loaded only when WordPress examines the updates
-├── dropins/                   Simple drop-ins without the plugin: apcu/, memcached/, redis/, each with object-cache.php
 ├── tests/                     PHPUnit integration tests
 ├── bin/release.php            Builds and publishes releases
 └── CHANGELOG.md               Release notes
@@ -192,8 +183,6 @@ On the default ports, the page sends `PING` to Redis and `version` to Memcached.
 - The suite loads each drop-in directly with lightweight WordPress function stubs and exercises it against the selected live backend. It does not boot a complete WordPress installation.
 - Shared coverage includes core `wp_cache_*` operations, runtime and backend persistence, bulk operations, expiration, global and non-persistent groups, group flushing, multisite isolation, and blog switching. Memcached-specific cases also cover oversized payload chunking.
 - Tests skip when the selected PHP extension or backend is unavailable.
-- Set `TW_CACHE_SIMPLE=1` to test the simple drop-in in `dropins/` instead of the handler in `plugin/handlers/`.
-- A fix in a handler of the plugin must also go into the simple drop-in of the same backend. The simple drop-ins are separate copies.
 
 ### Releases
 
