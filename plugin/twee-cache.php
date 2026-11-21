@@ -5,7 +5,7 @@
  * Description: A suite of high-performance, lightweight object caches built for large-scale WordPress projects.
  * Author: Andrii Toniievych
  * Author URI: https://www.linkedin.com/in/toniievych/
- * Version: 1.4.0
+ * Version: 1.5.0
  * Requires PHP: 8.0
  * License: MIT
  * Update URI: https://github.com/TwistedAndy/twee-cache

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.0
+
+The settings moved from `wp-content/cache-config.php` to the database. After this update, open **Settings → Cache Settings**, examine the values and select **Save Changes**. Then you can delete `cache-config.php`.
+
+- The new **Statistics** tab of the **Cache Settings** page shows the server details and the latency of 100 writes and 100 reads. It also shows the cache groups of the site, from the largest, with the number of keys and the size of each group.
+- Select a group on the **Statistics** tab to see its keys, their size, their expiration time and their values. To delete groups or keys, select their checkboxes, then select **Clean Selected**.
+- The page saves the settings in the `toc_settings` site option. The settings stay when you deactivate the plugin.
+- The plugin writes `wp-content/object-cache.php` with a copy of the settings. This file loads the handler from the plugin folder, so a plugin update also updates the cache code. When the plugin folder does not exist, WordPress uses its own cache.
+- You can copy a handler to `wp-content/` and use it without the plugin. The handlers are now in `plugin/handlers/{engine}/object-cache.php`, and a handler without the plugin reads the constants in `wp-config.php`.
+- **Tracing** and the **Commands** panel of Query Monitor are removed.
+- The Admin Bar menu sends no request to the backend. It shows if the drop-in is connected. The reads row has the name of the backend, such as **Redis reads**. The memory, the keys and the latency show in Query Monitor and on the **Statistics** tab.
+- When **Test Connection** fails, the message gives the reason. When Redis needs a password and the **Password** field is empty, the message tells where to find the password. A failed Memcached test names the servers and the reason, such as a timeout.
+- On the default ports, the page sends `PING` to Redis and `version` to Memcached. It uses a port only when the server answers.
+- The page no longer shows the notice "Some settings found on this server are different". The found values still show under the fields.
+
+Fixes:
+
+- The Object Cache menu in the Admin Bar had too much space under the last row.
+
 ## 1.4.0
 
 The settings file and its keys have new names. After this update, open **Settings → Cache Settings**, examine the values and select **Save Changes**.
